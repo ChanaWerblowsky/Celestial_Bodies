@@ -1,11 +1,16 @@
+
 import numpy as np
 from sympy import *
 from sympy import symbols, linsolve, solveset
 import matplotlib.pyplot as plt
-import time
+import cv2
+import glob
+import re
+import os
 import DateConversion
 import SunEarthMoonPosition
-from PIL import Image   # use ImageDraw.point()?
+from PIL import Image
+
 
 # user inputs
 au_cm = 14959787070000.0
@@ -28,8 +33,9 @@ obliquity = 23.43
 # phi_cam = 90
 # psi_cam = 0.1  # camera position for ~12PM
 # phi_cam = 180
-psi_cam = 70  # camera position for ~6PM
-phi_cam = 270
+psi_cam = 65  # camera position for ~6PM
+phi_cam = 265
+canvas_size = 256
 
 # convert to radians
 radians_day = degrees_day * np.pi/180
@@ -42,10 +48,14 @@ obliquity = obliquity * np.pi/180
 psi_cam = psi_cam * np.pi/180
 phi_cam = phi_cam * np.pi/180
 
-# array containing positions of sun, earth, and moon as returned from SunEarthMoonPosition
-sunEarthMoonPositions = SunEarthMoonPosition.get_positions()
-for i in range(10):
-    print(sunEarthMoonPositions[i])
+# mjds of rosh chodesh for year 2000
+rosh_chodesh_MJD = [(51551, 'Shevat'),  (51580, 'Adar I'), (51581, 'Adar I'), (51610, 'Adar II'), (51611, 'Adar II'),
+                    (51640, 'Nisan'), (51669, 'Iyar'), (51670, 'Iyar'), (51699, 'Sivan'), (51728, 'Tammuz'),
+                    (51729, 'Tammuz'), (51758, 'Av'), (51787, 'Elul'), (51788, 'Elul'), (51817, 'Tishrei'),
+                    (51818, 'Tishrei'), (51846, 'Cheshvan'), (51847, 'Cheshvan'), (51876, 'Kislev'), (51905, 'Teves')]
+
+# # array containing positions of sun, earth, and moon as returned from SunEarthMoonPosition
+# positionsArr = SunEarthMoonPosition.get_positions()
 
 
 def interpolation(xList, yList, order=2):
@@ -70,31 +80,8 @@ def interpolation(xList, yList, order=2):
     return polynomial
 
 
-# def interpolation(xList, yList, order=3):
-#     system = []
-#     a, b, c, d = symbols('a b c d')
-#     a, b, c, d = symbols('a b c d')
-#
-#     # create system of equations using given 4 (x,y) pairs
-#     for j in range(order+1):
-#         equation = ((xList[j] ** 3) * a) + ((xList[j] ** 2) * b) + ((xList[j]) * c) + d - yList[j]
-#         system.append(equation)
-#
-#     # list of coefficients of solution to linear system
-#     coeff = linsolve(system, [a, b, c, d])
-#     # print(coeff)
-#
-#     X, Y = symbols('X Y')
-#
-#     # get the one tuple in coefficient FiniteSet (the polynomial)
-#     for tup in coeff:
-#         polynomial = (tup[0] * X ** 3) + (tup[1] * X ** 2) + (tup[2] * X) + tup[3]  ##### - sunset_angle
-#
-#     return polynomial
-
-
 # returns the position of the body in question (sun/earth/moon) at the given MJD
-def get_pos(MJD, body):
+def get_pos(MJD, body, positionsArr):
 
     index_map = {'s': 1, 'e': 2, 'm': 3}
     i = index_map[body]
@@ -104,29 +91,26 @@ def get_pos(MJD, body):
     # determine where the given MJD lies relative to the list of mjd/position data points
     daysRecorded = tstop - tstart
     fractionOfTotal = (MJD - tstart) / daysRecorded
-    est_index = int(fractionOfTotal * Nt)  # the index of this MJD in positions array
+    est_index = int(fractionOfTotal * Nt)  # the index of this MJD in Positions array
 
     # go to the estimated index and adjust if necessary
-    data = sunEarthMoonPositions[est_index]
+    data = positionsArr[est_index]
     # print(data)
     while MJD < data[0]:
         est_index -= 1
-        data = sunEarthMoonPositions[est_index]
+        data = positionsArr[est_index]
 
-    while MJD > sunEarthMoonPositions[est_index+1][0]:
+    while MJD > positionsArr[est_index+1][0]:
         est_index += 1
-        data = sunEarthMoonPositions[est_index]
+        data = positionsArr[est_index]
 
     # interpolate to get set of positions at time in question
     # how many points??
     t_Vals = []
     pos_Vals = []
     for j in range(-1, 2):
-        t_Vals.append(sunEarthMoonPositions[est_index+j][0]-tstart)
-        pos_Vals.append(sunEarthMoonPositions[est_index+j][i])
-    # print(MJD-tstart)
-    # print('t:', t_Vals)
-    # print('pos:', pos_Vals)
+        t_Vals.append(positionsArr[est_index+j][0]-tstart)
+        pos_Vals.append(positionsArr[est_index+j][i])
 
     # isolate the variables
     x_Vals = [coords[0] for coords in pos_Vals]
@@ -157,12 +141,12 @@ def get_pos(MJD, body):
     return np.array([x, y, z])
 
 
-def moon_pos(MJD):
-
-    p_moon = get_pos(MJD, 'm')
-    p_earth = get_pos(MJD, 'e')
-
-    return p_moon - p_earth
+# def moon_pos(MJD):
+#
+#     p_moon = get_pos(MJD, 'm')
+#     p_earth = get_pos(MJD, 'e')
+#
+#     return p_moon - p_earth
 
 
 ### Utility functions
@@ -196,7 +180,7 @@ def n_body_jer(n_jer, p_body):
     return normalize(p_body_jer)
 
 
-def ecliptic_to_equatorial(v, eps):
+def ecliptic_to_equatorial(v, eps=obliquity):
     x_eq = v[0]
     y_eq = (np.cos(eps) * v[1]) - (np.sin(eps) * v[2])
     z_eq = (np.sin(eps) * v[1]) + (np.cos(eps) * v[2])
@@ -204,7 +188,7 @@ def ecliptic_to_equatorial(v, eps):
     return np.array([x_eq, y_eq, z_eq])
 
 
-def equatorial_to_ecliptic(v, eps):
+def equatorial_to_ecliptic(v, eps=obliquity):
     x_ec = v[0]
     y_ec = (np.cos(eps) * v[1]) + (np.sin(eps) * v[2])
     z_ec = -(np.sin(eps) * v[1]) + (np.cos(eps) * v[2])
@@ -328,8 +312,6 @@ def time_dif(MJD, time_zone, DST_START, DST_END):
     else:
         return standard_time_dif
 
-    #     # US: DST starts on second Sunday in March and ends on first Sunday in November
-
 
 # time in GMT
 def mjd(dd, mm, yy, tt):
@@ -421,7 +403,7 @@ def n_spherical_to_cartesian(theta, phi):
 
 
 # given day and angles of the location in question, determine position vectors from Earth's center to cur location and from cur location to the sun
-def zenithAndSunVectors(MJD, phi_dif, theta):
+def zenithAndSunVectors(MJD, phi_dif, theta, positionsArr):
     # days since spring equinox
     days_since_equinox = MJD - mjd_equinox
 
@@ -430,29 +412,29 @@ def zenithAndSunVectors(MJD, phi_dif, theta):
 
     # Jerusalem's normalized position vector
     n_jer_equ = n_spherical_to_cartesian(theta, phi)            # equatorial coords
-    n_jer_ecl = equatorial_to_ecliptic(n_jer_equ, obliquity)    # equatorial coords
+    n_jer_ecl = equatorial_to_ecliptic(n_jer_equ)    # equatorial coords
 
-    p_sun = get_pos(MJD, 's')
-    p_earth = get_pos(MJD, 'e')
+    p_sun = get_pos(MJD, 's', positionsArr)
+    p_earth = get_pos(MJD, 'e', positionsArr)
     p_sun = (p_sun-p_earth) * au_cm
 
     # sun's position relative to Jerusalem
     n_sun_jer = n_body_jer(n_jer_ecl, p_sun)                      # ecliptic coords
-    n_sun_jer_equ = ecliptic_to_equatorial(n_sun_jer, obliquity)  # equatorial coords
+    n_sun_jer_equ = ecliptic_to_equatorial(n_sun_jer)  # equatorial coords
 
     return n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ
 
 
 # angle between zenith of location in question and the vector from that location to the sun
-def psi_val(MJD, phi_dif, theta):
+def psi_val(MJD, phi_dif, theta, positionsArr):
 
-    n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD, phi_dif, theta)
+    n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD, phi_dif, theta, positionsArr)
 
     # dot product of n_jer in ecliptic coords and n_sun from jerusalem
     dot_product = n_jer_ecl.dot(n_sun_jer)
 
     # resulting angle between normalized vector from center of earth to Jer and normalized vector from Jer to sun
-    psi = np.acos(dot_product)
+    psi = np.arccos(float(dot_product))
 
     return psi
 
@@ -510,9 +492,7 @@ def n_from_observer_angles(psi, phi, observer_axes):
     return cartesian_equ_coords
 
 
-
-
-def psi_vs_time(MJD, time_zone, dst_start, dst_end, time_step=0.01):
+def psi_vs_time(MJD, time_zone, dst_start, dst_end, positionsArr, time_step=0.01):
 
     phi_dif, theta = phiDifAndTheta(time_zone)
 
@@ -525,14 +505,13 @@ def psi_vs_time(MJD, time_zone, dst_start, dst_end, time_step=0.01):
         if day:  MJD += 1
 
         time_difference = time_dif(MJD, time_zone, dst_start, dst_end)
-
         time = 0
         # time = 0-time_difference
 
         while time < 24:
             # find psi value (angle between epoch and sun position vector) at this point in time
             mjd_frac = MJD + time / 24
-            psi = psi_val(mjd_frac, phi_dif, theta)
+            psi = psi_val(mjd_frac, phi_dif, theta, positionsArr)
 
             # x.append(time + time_dif(MJD, time_zone, yr) + (24*day))
             acc_time = time + (24 * day) + time_difference
@@ -566,46 +545,19 @@ def solar_noon(polynomial, hr):
     return ''
 
 
-def sunriseSunset(MJD, time_zone, dst_start, dst_end):
+def sunriseSunset(MJD, time_zone, dst_start, dst_end, positionsArr):
 
     # get list of psi-values for each hour during this day
-    x, y = psi_vs_time(MJD, time_zone, dst_start, dst_end, 1)
-    print('x', x)
+    x, y = psi_vs_time(MJD, time_zone, dst_start, dst_end, positionsArr, 1)
+
     # construct polynomial of psi vs. time for each set of 4 hours; check at which times the angle is 91 degrees and at what time it's at a max
     noon = 0
     ans = []
     for i in range(3, 21):
 
-            ##################
-        # # get polynomial defined by the angles this hour, the previous hour, and the two following hours
-        # xQuad = x[i - 1:i + 2]  # slice of larger hour list
-        # yQuad = y[i - 1:i + 2]  # slice of larger angle list
-        #
-        # #### Method #1: System of Equations
-        #
-        # system = []
-        # a, b, c = symbols('a b c')
-        #
-        # # create system of equations using given 3 (x,y) pairs
-        # for j in range(3):
-        #     equation = ((xQuad[j] ** 2) * a) + ((xQuad[j]) * b) + c - yQuad[j]
-        #     system.append(equation)
-        #
-        # # list of coefficients of solution to linear system
-        # coeff = linsolve(system, [a, b, c])
-        #
-        # X, Y = symbols('X Y')
-        #
-        # # get the one tuple in coefficient FiniteSet (the polynomial)
-        # for tup in coeff:
-        #     polynomial = (tup[0] * X ** 2) + (tup[1] * X) + tup[2] - sunset_angle
-        ###############################
-        # print(i)
         # get polynomial defined by the angles this hour, the previous hour, and the two following hours
         hours = x[i - 3:i + 1]  # slice of larger hour list
         angles = y[i - 3:i + 1]  # slice of larger angle list
-        # print(hours)
-        # print(angles)
 
         #### System of Equations
         system = []
@@ -625,7 +577,7 @@ def sunriseSunset(MJD, time_zone, dst_start, dst_end):
         for tup in coeff:
             polynomial = (tup[0] * X**3) + (tup[1] * X**2) + (tup[2] * X) + tup[3] - sunset_angle
         #####################
-        print(polynomial)
+
         # get time of solar noon
         potential_noon = solar_noon(polynomial+sunset_angle, i)
 
@@ -657,7 +609,7 @@ def clean_time(hours):
     return str(int(hours)) + ':' + min + ':' + sec
 
 
-def earliest_sunset(yr, MJD, time_zone, dst_start, dst_end):
+def earliest_sunset(yr, MJD, time_zone, dst_start, dst_end, positionsArr):
 
     # get mjd of first day of given year
     mjd_cur = mjd(1, 1, yr, (0, 0))
@@ -676,7 +628,7 @@ def earliest_sunset(yr, MJD, time_zone, dst_start, dst_end):
         # find time of sunset
         # sunset = sunsetTime(mjd_cur)
 
-        sunset = sunriseSunset(mjd_cur, time_zone, dst_start, dst_end)[1][2]
+        sunset = sunriseSunset(mjd_cur, time_zone, dst_start, dst_end, positionsArr)[1][2]
 
         if sunset <= earliest:
             earliest = sunset
@@ -688,18 +640,11 @@ def earliest_sunset(yr, MJD, time_zone, dst_start, dst_end):
     return clean_time(earliest), earliestDay
 
 
-def timesAndAngle(d, m, y, MJD, time_zone, DST_START, DST_END):
+def timesAndAngle(d, m, y, MJD, time_zone, DST_START, DST_END, positionsArr):
 
     phi_dif, theta = phiDifAndTheta(time_zone)
 
-    # # mjd of date in question (in GMT)
-    # MJD = mjd(d, m, y, (0, 0))  # modified julian date
-    # time_zone = 'IST'
-    #
-    # # daylight savings time beginning and end for this year in this time zone
-    # DST_START, DST_END = DST(time_zone, y)
-
-    times = sunriseSunset(MJD, time_zone, DST_START, DST_END)
+    times = sunriseSunset(MJD, time_zone, DST_START, DST_END, positionsArr)
 
     # time of sunrise and sunset (via interpolations)
     print(str(d) + '/' + str(m) + '/' + str(y) + ': ' + times[0])
@@ -710,7 +655,7 @@ def timesAndAngle(d, m, y, MJD, time_zone, DST_START, DST_END):
     MJD_sunset = MJD + (times[1][2]/24) - 2/24
 
     ## phi at SUNRISE in observer coordinates:
-    n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD_sunrise, phi_dif,theta)
+    n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD_sunrise, phi_dif, theta, positionsArr)
 
     # set up observer axes
     axes = observer_axes(n_jer_equ)
@@ -721,7 +666,7 @@ def timesAndAngle(d, m, y, MJD, time_zone, DST_START, DST_END):
     print('psi, phi at sunrise:', psi, phi)
 
     ### phi at SUNSET
-    n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD_sunset, phi_dif, theta)
+    n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD_sunset, phi_dif, theta, positionsArr)
     # observer axes
     axes = observer_axes(n_jer_equ)
 
@@ -731,7 +676,7 @@ def timesAndAngle(d, m, y, MJD, time_zone, DST_START, DST_END):
     print('psi, phi at sunset:', psi, phi)
 
     ### phi at NOON
-    n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD_noon, phi_dif, theta)
+    n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD_noon, phi_dif, theta, positionsArr)
     # observer axes
     axes = observer_axes(n_jer_equ)
 
@@ -752,7 +697,7 @@ def timesAndAngle(d, m, y, MJD, time_zone, DST_START, DST_END):
     #     print(psi_vs_time(MJD, time_zone, DST_START, DST_END, 1))
 
 
-def psi_vs_phi(year, hour, time_zone, time_difference, start_day=1, end_day=365):
+def psi_vs_phi(year, hour, time_zone, time_difference, positionsArr, start_day=1, end_day=365):
 
     phi_dif, theta = phiDifAndTheta(time_zone)
 
@@ -772,7 +717,7 @@ def psi_vs_phi(year, hour, time_zone, time_difference, start_day=1, end_day=365)
         MJD += 1
 
         # zenith and sun vectors at 12pm on this day (in both ecliptic and equatorial coords)
-        n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD, phi_dif, theta)
+        n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD, phi_dif, theta, positionsArr)
 
         # set up observer axes
         axes = observer_axes(n_jer_equ)
@@ -848,13 +793,7 @@ def n_camera_coords(n, camera_axis_vectors):
 
 
 # plot the position of the sun in camera coordinates at a given time on each day of the given year
-def y_vs_x(year, hour, time_zone, time_difference, psi_cam, phi_cam, body, start_day=95, end_day=363):
-
-    # mjds of rosh chodesh for year 2000
-    rosh_chodesh_MJD = [(51551, 'Shevat'),  (51580, 'Adar I'), (51581, 'Adar I'), (51610, 'Adar II'), (51611, 'Adar II'),
-                        (51640, 'Nisan'), (51669, 'Iyar'), (51670, 'Iyar'), (51699, 'Sivan'), (51728, 'Tammuz'),
-                        (51729, 'Tammuz'), (51758, 'Av'), (51787, 'Elul'), (51788, 'Elul'), (51817, 'Tishrei'),
-                        (51818, 'Tishrei'), (51846, 'Cheshvan'), (51847, 'Cheshvan'), (51876, 'Kislev'), (51905, 'Teves')]
+def y_vs_x(year, hour, time_zone, time_difference, psi_cam, phi_cam, body, positionsArr, start_day=85, end_day=363):
 
     phi_dif, theta = phiDifAndTheta(time_zone)
 
@@ -890,10 +829,10 @@ def y_vs_x(year, hour, time_zone, time_difference, psi_cam, phi_cam, body, start
         MJD += 1
 
         # zenith and sun vectors at given time on this day (in both ecliptic and equatorial coords)
-        n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD, phi_dif, theta)
+        n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD, phi_dif, theta, positionsArr)
 
-        p_moon = moon_pos(MJD) * au_cm
-        p_moon_equ = ecliptic_to_equatorial(p_moon, obliquity)
+        p_moon = (get_pos(MJD, 'm', positionsArr) - get_pos(MJD, 'e', positionsArr)) * au_cm
+        p_moon_equ = ecliptic_to_equatorial(p_moon)
 
         # moon's position relative to Jerusalem
         n_moon_jer_equ = n_body_jer(n_jer_equ, p_moon_equ)
@@ -911,7 +850,7 @@ def y_vs_x(year, hour, time_zone, time_difference, psi_cam, phi_cam, body, start
         # elif body == 'm':
         x, y = n_camera_coords(n_moon_jer_equ, cam_axes)
 
-        # draw_moon(MJD, cam_axes, n_jer_ecl*earth_rad)
+        draw_moon(MJD, cam_axes, n_jer_equ*earth_rad, positionsArr)
         # RA_Dec_lines(cam_axes, n_jer_equ*earth_rad)
 
         ### store the determined x/y values in the correct list for later plotting
@@ -928,8 +867,6 @@ def y_vs_x(year, hour, time_zone, time_difference, psi_cam, phi_cam, body, start
             sunY.append(sun_y)
             # plt.text(x, y, rosh_chodesh_MJD[0][1])
 
-            # print(MJD, n_sun_jer, n_moon)
-            # print(sun_x, sun_y, x, y)
             if int(MJD) > rosh_chodesh_MJD[0][0]:
                 rosh_chodesh_MJD = rosh_chodesh_MJD[1:]   # slice off the first element
 
@@ -963,7 +900,7 @@ def y_vs_x(year, hour, time_zone, time_difference, psi_cam, phi_cam, body, start
             #     plt.text(x, y, DateConversion.MONTHS[month_cur - 1], fontfamily="times new roman", va='top',
             #              color='black')
 
-                # in any case, add this x/y point to the general x and y lists
+        # in any case, add this x/y point to the general x and y lists
         xList.append(x)
         yList.append(y)
 
@@ -991,17 +928,154 @@ def y_vs_x(year, hour, time_zone, time_difference, psi_cam, phi_cam, body, start
     plt.ylabel("Up", fontfamily="times new roman")
 
     plt.gca().set_aspect('equal', adjustable='datalim')
+    # plt.show()
 
-    plt.show()
+
+def plot_sun_moon(MJD, cam_axes, n_jer_equ, n_sun_jer_equ, positionsArr):
+    n_cam = np.cross(cam_axes[1], cam_axes[0])
+
+    p_moon = get_pos(MJD, 'm', positionsArr)
+    p_earth = get_pos(MJD, 'e', positionsArr)
+
+    p_moon_earth = p_moon-p_earth
+    p_moon_earth_equ = ecliptic_to_equatorial(p_moon_earth)
+
+    # moon's position relative to Jerusalem
+    n_moon_jer_equ = n_body_jer(n_jer_equ, p_moon_earth_equ)
+
+    # sun and moon vectors in camera coords
+    sun_x, sun_y = n_camera_coords(n_sun_jer_equ, cam_axes)
+    moon_x, moon_y = n_camera_coords(n_moon_jer_equ, cam_axes)
+
+    # plot
+    if n_moon_jer_equ.dot(n_cam) > 0:
+        plt.scatter(moon_x, moon_y, color='blue', s=100, marker='*')
+
+    if n_sun_jer_equ.dot(n_cam) > 0:
+        plt.scatter(sun_x, sun_y, color='red', s=400, marker='*')
+
+    return [sun_x, sun_y], [moon_x, moon_y]
 
 
-def moving_RA_Dec(MJD, phi_dif, theta):
+def drawHorizon(cam_axes, n_jer_equ):
+    n_cam = np.cross(cam_axes[1], cam_axes[0])
+    e_Z = n_jer_equ
+    e_R = cam_axes[0]
+    e_F = np.cross(e_Z, e_R)
 
-    for minute in range(5):
-        # MJD += 1/1440  # 1440 minutes in a 24-hr day
+    points = []
+
+    for i in range(0, 360, 1):
+        psi = i * np.pi/180
+        p = (e_R * np.cos(psi)) + (e_F * np.sin(psi))
+        x, y = n_camera_coords(p, cam_axes)  # in camera coords
+
+        if p.dot(n_cam) > 0:  # if visible
+            points.append([x, y])
+
+    for i in range(len(points)-1):
+        plt.plot([points[i][0], points[i+1][0]], [points[i][1], points[i+1][1]], 'b-', markersize=1)
+
+
+def RA_Dec_lines(cam_axes, p_jer_equ, imageData):
+
+    xMin = -0.999
+    xMax = 0.999
+    xRange = xMax - xMin
+    yMin = -0.999
+    yMax = 0.999
+    yRange = yMax - yMin
+    # xMin = -0.01
+    # xMax = 0.01
+    # xRange = xMax - xMin
+    # yMin = -0.01
+    # yMax = 0.01
+    # yRange = yMax - yMin
+
+    n_cam = np.cross(cam_axes[1], cam_axes[0])
+
+    # set plot axis boundaries
+    plt.xlim(-0.25, 0.25)
+    plt.ylim(-0.25, 0.25)
+    # plt.xlim(-1, 1)
+    # plt.ylim(-1, 1)
+    plt.gca().set_aspect('equal', adjustable='box')
+
+    # plot horizon
+    drawHorizon(cam_axes, normalize(p_jer_equ))
+
+    # RA LINES
+    # theta is held constant; phi varies
+    for i in range(0, 180, 30):
+        theta = i * np.pi/180
+        points = []
+        for j in range(0, 360):  # starting abt 90 degrees east of phi_jer
+            # account for earth's rotation??
+
+            phi = j * np.pi / 180
+
+            # Project this point onto x/y plane (i.e. convert to camera coordinates)
+            n_equ = n_spherical_to_cartesian(theta, phi)  # unit position vector (centered at earth's center)
+            p_equ = celestial_rad * n_equ                 # scaled up by radius of celestial sphere
+
+            # angleFromCam = acos((n_equ.dot(n_cam))/(np.sqrt(n_equ.dot(n_equ))*np.sqrt(n_cam.dot(n_cam))))
+            # print(angleFromCam)
+
+            x, y = n_camera_coords(n_equ, cam_axes)       # in camera coords
+
+            if p_equ.dot(p_jer_equ) > 0 and n_equ.dot(n_cam) > 0:  # if visible
+                points.append([x, y])
+                # canvasX = round(((x - xMin) / xRange) * canvas_size)
+                # canvasY = round(((y - yMin) / yRange) * canvas_size)
+                # if canvasX == 256: canvasX = 255
+                # if canvasY == 256: canvasY = 255
+                # if 0 < canvasX < 256 and 0 < canvasY < 256:
+                #     imageData[canvasX, canvasY] = [255, 255, 255]
+
+        for j in range(len(points)-1):
+            plt.plot([points[j][0], points[j + 1][0]], [points[j][1], points[j + 1][1]], 'k-')
+
+    # DECLINATION LINES
+    # phi is held constant; theta varies
+    for i in range(0, 361, 30):
+        phi = i * np.pi / 180
+        points = []
+        for j in range(0, 181):
+            theta = j * np.pi / 180
+
+            # Project this point onto x/y plane (i.e. convert to camera coordinates)
+            n_equ = n_spherical_to_cartesian(theta, phi)  # unit position vector (centered at earth's center)
+            p_equ = celestial_rad * n_equ            # scaled up by radius of celestial sphere
+            x, y = n_camera_coords(n_equ, cam_axes)  # in camera coords
+
+            if p_equ.dot(p_jer_equ) > 0 and n_equ.dot(n_cam) > 0:  # if visible
+                points.append([x, y])
+                # canvasX = round(((x - xMin) / xRange) * canvas_size)
+                # canvasY = round(((y - yMin) / yRange) * canvas_size)
+                # if canvasX == 256: canvasX = 255
+                # if canvasY == 256: canvasY = 255
+                # if 0 < canvasX < 256 and 0 < canvasY < 256:
+                #     imageData[canvasX, canvasY] = [255, 255, 255]
+
+        for j in range(len(points) - 1):
+            plt.plot([points[j][0], points[j + 1][0]], [points[j][1], points[j + 1][1]], 'k-', markersize=1)
+
+    return imageData
+
+
+def moving_RA_Dec(MJD, phi_dif, theta, positionsArr):
+    dir = 'C:/Users/tywer/Documents/Celestial Coordinates/Plots'
+    for file in os.scandir(dir):
+        os.remove(file.path)
+
+    # start at 5pm IST  (use conjunction times??)
+    MJD += 14.66/24
+    # MJD += 15.66/24
+
+    for interval in range(1):
         MJD += 1/480  # every 3 min
 
-        n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD, phi_dif, theta)
+        n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD, phi_dif, theta, positionsArr)
 
         # set up OBSERVER axes according to current position of Jerusalem
         axes = observer_axes(n_jer_equ)
@@ -1009,126 +1083,157 @@ def moving_RA_Dec(MJD, phi_dif, theta):
         # now, set up CAMERA axes using observer axes and given position of camera
         cam_axes = camera_axes(psi_cam, phi_cam, axes)
 
-        # finally, draw the RA and Dec lines
-        RA_Dec_lines(cam_axes, n_jer_equ * earth_rad)
+        # finally, draw RA and Dec lines and sun/moon
+        imageData = np.zeros((canvas_size, canvas_size, 3), dtype=np.uint8)
+
+        f = plt.figure()
+        plt.gca().set_aspect('equal', adjustable='box')
+
+        sun_coords, moon_coords = plot_sun_moon(MJD, cam_axes, n_jer_equ, n_sun_jer_equ, positionsArr)
+        imageData = RA_Dec_lines(cam_axes, n_jer_equ * earth_rad, imageData)
+        # imageData = draw_sun(MJD, cam_axes, n_jer_ecl*earth_rad, imageData, positionsArr)
+        imageData = draw_moon(MJD, cam_axes, n_jer_ecl*earth_rad, moon_coords, imageData, positionsArr)
+
+        image = Image.fromarray(imageData)
+        image.show()
+
+        plt.title("MJD:" + str(MJD))
+        plt.xlabel("Right", fontfamily="times new roman")
+        plt.ylabel("Up", fontfamily="times new roman")
+
         plt.show()
-        # plt.savefig("Figure"+str(quarterHour))
+        f.savefig("./Plots/"+str(interval))
 
 
-def RA_Dec_lines(cam_axes, p_jer_equ):
-
-    # set plot axis boundaries
-    plt.xlim(-0.5, 0.5)
-    plt.ylim(-0.5, 0.5)
-
-    # plot horizon
-    plt.axhline(((psi_cam*180/np.pi)-90)/100)
-
-    # loop through theta and phi (in 30-degree steps)
-    for theta in range(0, 181, 30):
-        theta = theta * np.pi/180
-        points = []
-        for phi in range(0, 361, 30):
-            phi = phi * np.pi / 180
-
-            # Project this point onto x/y plane (i.e. convert to camera coordinates)
-            n_equ = n_spherical_to_cartesian(theta, phi)  # unit position vector (centered at earth's center)
-            p_equ = celestial_rad * n_equ                 # scaled up by radius of celestial sphere
-            x, y = n_camera_coords(n_equ, cam_axes)       # in camera coords
-
-            if p_equ.dot(p_jer_equ) > 0:  # if visible
-                points.append([x, y])
-
-        for j in range(len(points)-1):
-            plt.plot([points[j][0], points[j+1][0]], [points[j][1], points[j+1][1]], 'ro-')
-
-    # now loop first through phi and then theta (in 30-degree steps)
-    for phi in range(0, 361, 30):
-        phi = phi * np.pi / 180
-        points = []
-        for theta in range(0, 181, 30):
-            theta = theta * np.pi / 180
-
-            # Project this point onto x/y plane (i.e. convert to camera coordinates)
-            n_equ = n_spherical_to_cartesian(theta, phi)  # unit position vector (centered at earth's center)
-            p_equ = celestial_rad * n_equ            # scaled up by radius of celestial sphere
-            x, y = n_camera_coords(n_equ, cam_axes)  # in camera coords
-
-            if p_equ.dot(p_jer_equ) > 0:  # if visible
-                points.append([x, y])
-
-        for j in range(len(points) - 1):
-            plt.plot([points[j][0], points[j + 1][0]], [points[j][1], points[j + 1][1]], 'ro-')
+def natural_sort_key(s, _nsre=re.compile('([0-9]+)')):
+    return [
+        int(text)
+        if text.isdigit() else text.lower()
+        for text in _nsre.split(s)]
 
 
-def draw_moon(MJD, cam_axes, p_jer_ecl):
+def movie():
 
-    p_sun = get_pos(MJD, 's')
-    p_moon = get_pos(MJD, 'm')
+    img_array = [img for img in glob.glob('C:/Users/tywer/Documents/Celestial Coordinates/Plots/*.png')]
+    sorted_images = sorted(img_array, key=natural_sort_key)
+
+    img = cv2.imread(img_array[0])
+    height, width, layers = img.shape
+    size = (width, height)
+
+    out = cv2.VideoWriter('RaDec.avi', cv2.VideoWriter_fourcc(*'DIVX'), 8, size)
+
+    for image in sorted_images:
+        out.write(cv2.imread(image))
+
+    cv2.destroyAllWindows()
+    out.release()
+
+
+def draw_moon(MJD, cam_axes, p_jer_ecl, moon_coords, imageData, positionsArr):
+
+    moon_x, moon_y = moon_coords
+
+    xMin = moon_x-0.01
+    xMax = moon_x+0.01
+    xRange = xMax - xMin
+    yMin = moon_y-0.01
+    yMax = moon_y+0.01
+    yRange = yMax - yMin
+
+    # n_cam = np.cross(cam_axes[1], cam_axes[0])
+
+    p_sun = get_pos(MJD, 's', positionsArr)
+    p_moon = get_pos(MJD, 'm', positionsArr)
+    p_earth = get_pos(MJD, 'e', positionsArr)
+    p_jer = p_jer_ecl + p_earth
+
     yellowX = []
     yellowY = []
     blueX = []
     blueY = []
-    blackX = []
-    blackY = []
-
-    # yellowDict = {}
-    # blueDict = {}
-    # blackDict = {}
-
 
     # loop through each point on the moon
-    for theta in range(0, 180):
+    for theta in range(0, 180, 5):
         theta = theta * np.pi/180
-        for phi in range(0, 360):
+        for phi in range(0, 360, 5):
             phi = phi * np.pi / 180
 
             # this point in ecliptic cartesian coords
             s = n_spherical_to_cartesian(theta, phi) * moon_rad  # vector from center of moon to current point (in moon coords)
             p_s = p_moon + s  # ecliptic coords
 
-            x, y = n_camera_coords(p_s, cam_axes)  # camera (x-y) coords
+            n_moon_jer_equ = ecliptic_to_equatorial(normalize(p_s-p_jer))
+            x, y = n_camera_coords(n_moon_jer_equ, cam_axes)  # camera (x-y) coords
 
-            # if visible to observer and sun, plot as yellow dot...
-            if s.dot(p_s-p_jer_ecl) < 0 and s.dot(p_s-p_sun) < 0:
-                # if x in yellowDict:
-                #     yellowDict[x].append(y)
-                # else:
-                #     yellowDict[x] = [y]
+            if s.dot(p_s-p_jer) < 0 and s.dot(p_s-p_sun) >= 0:
+                canvasX = round(((x - xMin) / xRange) * canvas_size)
+                canvasY = round(((yMax - y) / yRange) * canvas_size)
+                if canvasX == 256: canvasX = 255
+                if canvasY == 256: canvasY = 255
+                imageData[canvasY, canvasX] = [47, 79, 79]
+                imageData[canvasY-1:canvasY+1, canvasX-1:canvasX+1] = [47, 79, 79]
+
+
+            elif s.dot(p_s-p_jer) < 0 and s.dot(p_s-p_sun) < 0:
+                canvasX = round(((x - xMin) / xRange) * canvas_size)
+                canvasY = round(((yMax - y) / yRange) * canvas_size)
+                if canvasX == 256: canvasX = 255
+                if canvasY == 256: canvasY = 255
+                imageData[canvasY-1:canvasY+1, canvasX-1:canvasX+1] = [255, 255, 255]
+
+    image = Image.fromarray(imageData)
+    # image.show()
+    plt.scatter(yellowX, yellowY, color='yellow')
+    plt.scatter(blueX, blueY, color='blue')
+    return imageData
+    # return image
+
+
+def draw_sun(MJD, cam_axes, p_jer_ecl, imageData, positionsArr):
+    n_cam = np.cross(cam_axes[1], cam_axes[0])
+
+    p_sun = get_pos(MJD, 's', positionsArr)
+    p_earth = get_pos(MJD, 'e', positionsArr)
+    p_jer = p_jer_ecl + p_earth
+
+    yellowX = []
+    yellowY = []
+    blueX = []
+    blueY = []
+
+    # loop through each point on the sun
+    for theta in range(0, 180, 5):
+        theta = theta * np.pi / 180
+        for phi in range(0, 360, 5):
+            phi = phi * np.pi / 180
+
+            # this point in ecliptic cartesian coords
+            s = n_spherical_to_cartesian(theta,
+                                         phi) * sun_rad  # vector from center of sun to current point (in moon coords)
+            p_s = p_sun + s  # ecliptic coords
+            n_sun_jer_equ = ecliptic_to_equatorial(normalize(p_s - p_jer))
+            x, y = n_camera_coords(n_sun_jer_equ, cam_axes)  # camera (x-y) coords
+
+            # if visible to observer plot as yellow dot...
+            if s.dot(p_s - p_jer) < 0:
                 yellowX.append(x)
                 yellowY.append(y)
 
-            elif s.dot(p_s-p_jer_ecl) < 0:
+            else:
                 blueX.append(x)
                 blueY.append(y)
-                # if x in blueDict:
-                #     blueDict[x].append(y)
-                # else:
-                #     blueDict[x] = [y]
 
-            else:
-                # plt.plot(x, y, color='black')
-                blackX.append(x)
-                blackY.append(y)
-                # if x in blackDict:
-                #     blackDict[x].append(y)
-                # else:
-                #     blackDict[x] = [y]
-
-    # for x in yellowDict:
-    #     for y in yellowDict[x]:
-    #         plt.plot(x, y, color='yellow')
-    plt.scatter(blackX, blackY, color='black')
     plt.scatter(yellowX, yellowY, color='yellow')
     plt.scatter(blueX, blueY, color='blue')
-
-
-    plt.show()
+    return imageData
+    # image = Image.fromarray(imageData)
+    # return image
 
 
 def main():
 
-    day = 5
+    day = 8
     month = 1
     year = 2000
     time_zone = 'IST'
@@ -1136,41 +1241,21 @@ def main():
     # mjd of date in question (in GMT)
     MJD = mjd(day, month, year, (0, 0))  # modified julian date
 
+    # MJD = rosh_chodesh_MJD[5][0] + 1.05
+
+    # array containing positions of sun, earth, and moon as returned from SunEarthMoonPosition.py
+    positionsArr = SunEarthMoonPosition.get_positions(year)
+
     # daylight savings time beginning and end for this year in this time zone
     DST_START, DST_END = DST(time_zone, year)
 
     # time-difference between local time and GMT
     time_difference = time_dif(MJD, time_zone, DST_START, DST_END)
 
-    # y_vs_x(year, 17.66, time_zone, time_difference, psi_cam, phi_cam, 's')
-    # y_vs_x(year, 2, time_zone, time_difference, psi_cam, phi_cam, 'm')
-
-    moving_RA_Dec(MJD, phi_jer, theta_jer)
-
-
-    # MJD = 51547.6525
-    # sun = get_pos(MJD, 's') * au_cm
-    # moon = get_pos(MJD, 'm') * au_cm
-    # earth = get_pos(MJD, 'e') * au_cm
-    # n_sun = normalize(sun-earth)
-    # n_moon = normalize(moon-earth)
-    # print(n_sun, n_moon)
-    #
-    # MJD = 51544.7305
-    # # sun = get_pos(MJD, 's') #* au_cm
-    # moon = get_pos(MJD, 'm') #* au_cm
-    # earth = get_pos(MJD, 'e') #* au_cm
-    # sun = get_pos(MJD, 's')
-    # n_sun = normalize(sun-earth)
-    # n_moon = normalize(earth-moon)
-    # print(earth)
-
-    # timesAndAngle(day, month, year, MJD, time_zone, DST_START, DST_END)
+    print(sunriseSunset(MJD, time_zone, DST_START, DST_END, positionsArr))
+    moving_RA_Dec(MJD, phi_jer, theta_jer, positionsArr)
+    # movie()
 
 
 main()
-
-# fix up equinox determination
-# solstice determination
-# time difference between sunrise and sunset --> hours in the day --> camera position angles at given time on given day
 
