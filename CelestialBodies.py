@@ -7,9 +7,10 @@ import cv2
 import glob
 import re
 import os
-import DateConversion
-import SunEarthMoonPosition
+from DateConversion import year_lists
+from SunEarthMoonPosition import get_positions
 from PIL import Image
+from CalendarUtilities import month_len, isLeap, mjd
 
 
 # user inputs
@@ -33,8 +34,8 @@ obliquity = 23.43
 # phi_cam = 90
 # psi_cam = 0.1  # camera position for ~12PM
 # phi_cam = 180
-psi_cam = 65  # camera position for ~6PM
-phi_cam = 265
+psi_cam = 85  # camera position for ~6PM
+phi_cam = 205
 canvas_size = 256
 
 # convert to radians
@@ -86,7 +87,10 @@ def get_pos(MJD, body, positionsArr):
     index_map = {'s': 1, 'e': 2, 'm': 3}
     i = index_map[body]
 
-    tstart, tstop, Nt = SunEarthMoonPosition.tstart, SunEarthMoonPosition.tstop, SunEarthMoonPosition.Nt
+    # tstart, tstop, Nt = SunEarthMoonPosition.tstart, SunEarthMoonPosition.tstop, SunEarthMoonPosition.Nt
+    tstart = positionsArr[0][0]  # mjd of Jan 1 of this year
+    tstop = tstart + 366
+    Nt = len(positionsArr) + 1
 
     # determine where the given MJD lies relative to the list of mjd/position data points
     daysRecorded = tstop - tstart
@@ -96,19 +100,18 @@ def get_pos(MJD, body, positionsArr):
     # go to the estimated index and adjust if necessary
     data = positionsArr[est_index]
     # print(data)
-    while MJD < data[0]:
+    while MJD < data[0]:                        # if MJD is lower than current entry, move backward
         est_index -= 1
         data = positionsArr[est_index]
 
-    while MJD > positionsArr[est_index+1][0]:
+    while MJD > positionsArr[est_index+1][0]:   # if greater than the following entry, move forward
         est_index += 1
         data = positionsArr[est_index]
 
     # interpolate to get set of positions at time in question
-    # how many points??
     t_Vals = []
     pos_Vals = []
-    for j in range(-1, 2):
+    for j in range(-1, 2):  # use the prev interval, this one, and the following one
         t_Vals.append(positionsArr[est_index+j][0]-tstart)
         pos_Vals.append(positionsArr[est_index+j][i])
 
@@ -116,15 +119,6 @@ def get_pos(MJD, body, positionsArr):
     x_Vals = [coords[0] for coords in pos_Vals]
     y_Vals = [coords[1] for coords in pos_Vals]
     z_Vals = [coords[2] for coords in pos_Vals]
-
-    # # subtract mean value from each variable list to center them about the origin
-    # mean_x = np.mean(x_Vals)
-    # mean_y = np.mean(y_Vals)
-    # mean_z = np.mean(z_Vals)
-    # x_Vals = [val - mean_x for val in x_Vals]
-    # y_Vals = [val - mean_y for val in y_Vals]
-    # z_Vals = [val - mean_z for val in z_Vals]
-
 
     X, Y = symbols('X Y')
 
@@ -150,23 +144,6 @@ def get_pos(MJD, body, positionsArr):
 
 
 ### Utility functions
-# Returns length of given gregorian month
-
-def month_len(month, leap):
-    # index of list is month number-1
-    month_lengths = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-
-    if month == 2 and leap:
-        return 29
-
-    return month_lengths[month - 1]
-
-
-def isLeap(year):
-    return year % 4 == 0 and \
-           (year % 100 != 0 or (year % 100 == 0 and year % 400 == 0))
-
-
 def normalize(v):
     length = np.sqrt(float(v.dot(v)))
     return v / length
@@ -227,8 +204,8 @@ def DST(time_zone, yr):
     # determine MJD of Friday before last Sunday in March of the given year
 
     # day of week of March 1
-    greg_yrs, hebrew_yrs = DateConversion.year_lists()
-    hebrew_yrs = None  # garbage-collection
+    greg_yrs, hebrew_yrs = year_lists()
+    hebrew_yrs = None  # garbage collection
 
     yr_tuple = greg_yrs[yr + 3760]  # year tuple from year-lists specifying MJD and day of week of Jan 1
 
@@ -995,10 +972,10 @@ def RA_Dec_lines(cam_axes, p_jer_equ, imageData):
     n_cam = np.cross(cam_axes[1], cam_axes[0])
 
     # set plot axis boundaries
-    plt.xlim(-0.25, 0.25)
-    plt.ylim(-0.25, 0.25)
-    # plt.xlim(-1, 1)
-    # plt.ylim(-1, 1)
+    # plt.xlim(-0.25, 0.25)
+    # plt.ylim(-0.25, 0.25)
+    plt.xlim(-1, 1)
+    plt.ylim(-1, 1)
     plt.gca().set_aspect('equal', adjustable='box')
 
     # plot horizon
@@ -1069,8 +1046,9 @@ def moving_RA_Dec(MJD, phi_dif, theta, positionsArr):
         os.remove(file.path)
 
     # start at 5pm IST  (use conjunction times??)
-    MJD += 14.66/24
+    # MJD += 14.66/24
     # MJD += 15.66/24
+    MJD += 22.66/24
 
     for interval in range(1):
         MJD += 1/480  # every 3 min
@@ -1233,10 +1211,10 @@ def draw_sun(MJD, cam_axes, p_jer_ecl, imageData, positionsArr):
 
 def main():
 
-    day = 8
-    month = 1
-    year = 2000
-    time_zone = 'IST'
+    day = 21
+    month = 9
+    year = 2023
+    time_zone = 'EST'
 
     # mjd of date in question (in GMT)
     MJD = mjd(day, month, year, (0, 0))  # modified julian date
@@ -1244,7 +1222,7 @@ def main():
     # MJD = rosh_chodesh_MJD[5][0] + 1.05
 
     # array containing positions of sun, earth, and moon as returned from SunEarthMoonPosition.py
-    positionsArr = SunEarthMoonPosition.get_positions(year)
+    positionsArr = get_positions(year)
 
     # daylight savings time beginning and end for this year in this time zone
     DST_START, DST_END = DST(time_zone, year)
@@ -1252,8 +1230,10 @@ def main():
     # time-difference between local time and GMT
     time_difference = time_dif(MJD, time_zone, DST_START, DST_END)
 
-    print(sunriseSunset(MJD, time_zone, DST_START, DST_END, positionsArr))
-    moving_RA_Dec(MJD, phi_jer, theta_jer, positionsArr)
+    # print(sunriseSunset(MJD, time_zone, DST_START, DST_END, positionsArr))
+
+    phi_dif, theta = phiDifAndTheta(time_zone)
+    moving_RA_Dec(MJD, phi_dif, theta, positionsArr)
     # movie()
 
 
