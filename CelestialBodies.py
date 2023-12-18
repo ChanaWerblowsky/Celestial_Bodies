@@ -11,7 +11,7 @@ from DateConversion import year_lists
 from SunEarthMoonPosition import get_positions
 from PIL import Image
 from CalendarUtilities import month_len, isLeap, mjd
-
+from SunEarthMoonPositionTest import get_data, get_cur_positions
 
 # user inputs
 au_cm = 14959787070000.0
@@ -31,11 +31,11 @@ dayNum_mjdEpoch = 2052005
 sunset_angle = 90.8
 obliquity = 23.43
 # psi_cam = 90   # camera position for ~8AM
-# phi_cam = 90
+phi_cam = 259
 # psi_cam = 0.1  # camera position for ~12PM
 # phi_cam = 180
-psi_cam = 85  # camera position for ~6PM
-phi_cam = 205
+psi_cam = 76  # camera position for ~6PM
+# phi_cam = 205
 canvas_size = 256
 
 # convert to radians
@@ -108,7 +108,7 @@ def get_pos(MJD, body, positionsArr):
         est_index += 1
         data = positionsArr[est_index]
 
-    # interpolate to get set of positions at time in question
+    # interpolate to get positions at exact time in question
     t_Vals = []
     pos_Vals = []
     for j in range(-1, 2):  # use the prev interval, this one, and the following one
@@ -120,9 +120,15 @@ def get_pos(MJD, body, positionsArr):
     y_Vals = [coords[1] for coords in pos_Vals]
     z_Vals = [coords[2] for coords in pos_Vals]
 
+    # x = np.interp(MJD-tstart, t_Vals, x_Vals)
+    # y = np.interp(MJD-tstart, t_Vals, y_Vals)
+    # z = np.interp(MJD-tstart, t_Vals, z_Vals)
+
+
     X, Y = symbols('X Y')
 
-    # interpolate x, y, and z coordinates separately
+    ## interpolate x, y, and z coordinates separately:
+    # create polynomial for each
     p_X = interpolation(t_Vals, x_Vals, 2)
     p_Y = interpolation(t_Vals, y_Vals, 2)
     p_Z = interpolation(t_Vals, z_Vals, 2)
@@ -145,9 +151,11 @@ def get_pos(MJD, body, positionsArr):
 
 ### Utility functions
 def normalize(v):
-    length = np.sqrt(float(v.dot(v)))
-    return v / length
+    return v / length(v)
 
+
+def length(v):
+    return np.sqrt(float(v.dot(v)))
 
 # normalized position vector from current Jerusalem position to current position of sun/moon
 
@@ -375,6 +383,16 @@ def n_spherical_to_cartesian(theta, phi):
     z = np.cos(theta)
 
     return np.array([x, y, z])
+
+
+def cartesian_to_spherical(v):
+    x, y, z = np.array([float(v[0]), float(v[1]), float(v[2])])
+    r = np.sqrt(x**2 + y**2 + z**2)
+    phi = np.arctan(y/x)
+    theta = np.arccos(z/r)
+
+    return np.array([r, phi, theta])
+
 
 ####################
 
@@ -640,7 +658,6 @@ def timesAndAngle(d, m, y, MJD, time_zone, DST_START, DST_END, positionsArr):
     # sun-Jerusalem vector in observer coordinates
     coords = n_observer_coords(n_sun_jer_equ, axes)
     psi, phi = n_observer_angles(coords[0], coords[1], coords[2])
-    print('psi, phi at sunrise:', psi, phi)
 
     ### phi at SUNSET
     n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD_sunset, phi_dif, theta, positionsArr)
@@ -650,7 +667,6 @@ def timesAndAngle(d, m, y, MJD, time_zone, DST_START, DST_END, positionsArr):
     # sun-Jerusalem vector in observer coordinates
     coords = n_observer_coords(n_sun_jer_equ, axes)
     psi, phi = n_observer_angles(coords[0], coords[1], coords[2])
-    print('psi, phi at sunset:', psi, phi)
 
     ### phi at NOON
     n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(MJD_noon, phi_dif, theta, positionsArr)
@@ -739,10 +755,15 @@ def psi_vs_phi(year, hour, time_zone, time_difference, positionsArr, start_day=1
 
 
 # set up Right and Up axes given the angles of the camera (relative to the observer)
-def camera_axes(psi_cam, phi_cam, observer_axes):
+def camera_axes(MJD, p_jer_ecl, positionsArr, observer_axes):
 
     e_N, e_E, e_Z = observer_axes
 
+    p_moon = get_pos(MJD, 'm', positionsArr)
+    p_earth = get_pos(MJD, 'e', positionsArr)
+    p_jer = p_jer_ecl + p_earth
+
+    # n_cam = p_moon-p_jer
     # camera's position vector in equatorial coords, given psi and psi angles relative to the observer
     n_cam = n_from_observer_angles(psi_cam, phi_cam, observer_axes)
 
@@ -818,7 +839,7 @@ def y_vs_x(year, hour, time_zone, time_difference, psi_cam, phi_cam, body, posit
         axes = observer_axes(n_jer_equ)
 
         # now, set up CAMERA axes using observer axes and given position of camera
-        cam_axes = camera_axes(psi_cam, phi_cam, axes)
+        cam_axes = camera_axes(MJD, n_jer_ecl*earth_rad, positionsArr, axes)
 
         # if body == 's':
         # and determine sun position vector in camera coords
@@ -926,7 +947,7 @@ def plot_sun_moon(MJD, cam_axes, n_jer_equ, n_sun_jer_equ, positionsArr):
 
     # plot
     if n_moon_jer_equ.dot(n_cam) > 0:
-        plt.scatter(moon_x, moon_y, color='blue', s=100, marker='*')
+        plt.scatter(moon_x, moon_y, color='blue', s=100, marker='.')
 
     if n_sun_jer_equ.dot(n_cam) > 0:
         plt.scatter(sun_x, sun_y, color='red', s=400, marker='*')
@@ -1037,6 +1058,7 @@ def RA_Dec_lines(cam_axes, p_jer_equ, imageData):
         for j in range(len(points) - 1):
             plt.plot([points[j][0], points[j + 1][0]], [points[j][1], points[j + 1][1]], 'k-', markersize=1)
 
+    # plt.show()
     return imageData
 
 
@@ -1044,11 +1066,6 @@ def moving_RA_Dec(MJD, phi_dif, theta, positionsArr):
     dir = 'C:/Users/tywer/Documents/Celestial Coordinates/Plots'
     for file in os.scandir(dir):
         os.remove(file.path)
-
-    # start at 5pm IST  (use conjunction times??)
-    # MJD += 14.66/24
-    # MJD += 15.66/24
-    MJD += 22.66/24
 
     for interval in range(1):
         MJD += 1/480  # every 3 min
@@ -1059,7 +1076,7 @@ def moving_RA_Dec(MJD, phi_dif, theta, positionsArr):
         axes = observer_axes(n_jer_equ)
 
         # now, set up CAMERA axes using observer axes and given position of camera
-        cam_axes = camera_axes(psi_cam, phi_cam, axes)
+        cam_axes = camera_axes(MJD, n_jer_ecl*earth_rad, positionsArr, axes)
 
         # finally, draw RA and Dec lines and sun/moon
         imageData = np.zeros((canvas_size, canvas_size, 3), dtype=np.uint8)
@@ -1070,10 +1087,8 @@ def moving_RA_Dec(MJD, phi_dif, theta, positionsArr):
         sun_coords, moon_coords = plot_sun_moon(MJD, cam_axes, n_jer_equ, n_sun_jer_equ, positionsArr)
         imageData = RA_Dec_lines(cam_axes, n_jer_equ * earth_rad, imageData)
         # imageData = draw_sun(MJD, cam_axes, n_jer_ecl*earth_rad, imageData, positionsArr)
-        imageData = draw_moon(MJD, cam_axes, n_jer_ecl*earth_rad, moon_coords, imageData, positionsArr)
-
-        image = Image.fromarray(imageData)
-        image.show()
+        # draw_moon(MJD, cam_axes, n_jer_ecl*earth_rad, moon_coords, imageData, positionsArr)
+        draw_moon2(MJD, cam_axes, n_jer_ecl*earth_rad, imageData, positionsArr)
 
         plt.title("MJD:" + str(MJD))
         plt.xlabel("Right", fontfamily="times new roman")
@@ -1110,13 +1125,17 @@ def movie():
 
 def draw_moon(MJD, cam_axes, p_jer_ecl, moon_coords, imageData, positionsArr):
 
-    moon_x, moon_y = moon_coords
+    moonColorIm = Image.open('lroc_color_poles_2k.tif')
+    im_array = np.asarray(moonColorIm)
 
-    xMin = moon_x-0.01
-    xMax = moon_x+0.01
+    fov = 0.04   # field of view
+    # moon_x, moon_y = moon_coords
+    moon_x = moon_y = 0
+    xMin = moon_x-(fov/2)
+    xMax = moon_x+(fov/2)
     xRange = xMax - xMin
-    yMin = moon_y-0.01
-    yMax = moon_y+0.01
+    yMin = moon_y-(fov/2)
+    yMax = moon_y+(fov/2)
     yRange = yMax - yMin
 
     # n_cam = np.cross(cam_axes[1], cam_axes[0])
@@ -1132,40 +1151,148 @@ def draw_moon(MJD, cam_axes, p_jer_ecl, moon_coords, imageData, positionsArr):
     blueY = []
 
     # loop through each point on the moon
-    for theta in range(0, 180, 5):
-        theta = theta * np.pi/180
-        for phi in range(0, 360, 5):
-            phi = phi * np.pi / 180
+    for i_theta in range(0, 180, 10):
+        theta = i_theta * np.pi/180
+
+        for i_phi in range(0, 360, 10):
+            phi = i_phi * np.pi / 180
 
             # this point in ecliptic cartesian coords
             s = n_spherical_to_cartesian(theta, phi) * moon_rad  # vector from center of moon to current point (in moon coords)
             p_s = p_moon + s  # ecliptic coords
 
+            # vector from jer to this point on the moon
             n_moon_jer_equ = ecliptic_to_equatorial(normalize(p_s-p_jer))
             x, y = n_camera_coords(n_moon_jer_equ, cam_axes)  # camera (x-y) coords
 
-            if s.dot(p_s-p_jer) < 0 and s.dot(p_s-p_sun) >= 0:
-                canvasX = round(((x - xMin) / xRange) * canvas_size)
-                canvasY = round(((yMax - y) / yRange) * canvas_size)
-                if canvasX == 256: canvasX = 255
-                if canvasY == 256: canvasY = 255
-                imageData[canvasY, canvasX] = [47, 79, 79]
-                imageData[canvasY-1:canvasY+1, canvasX-1:canvasX+1] = [47, 79, 79]
+            canvasX = round(((x - xMin) / xRange) * canvas_size)
+            canvasY = round(((yMax - y) / yRange) * canvas_size)
 
+            # map this (phi, theta) point onto the 2D moon-color image
+            x_val = (2048 * ((i_phi + 180)/360)) % 2048
+            y_val = 1024 * (i_theta/180)
 
-            elif s.dot(p_s-p_jer) < 0 and s.dot(p_s-p_sun) < 0:
-                canvasX = round(((x - xMin) / xRange) * canvas_size)
-                canvasY = round(((yMax - y) / yRange) * canvas_size)
-                if canvasX == 256: canvasX = 255
-                if canvasY == 256: canvasY = 255
-                imageData[canvasY-1:canvasY+1, canvasX-1:canvasX+1] = [255, 255, 255]
+            color = im_array[round(y_val)][round(x_val)]
+
+            if s.dot(p_s - p_jer) < 0:
+                if s.dot(p_s-p_sun) >= 0:
+                    imageData[canvasY - 1:canvasY + 1, canvasX - 1:canvasX + 1] = color/4
+                else:
+                    imageData[canvasY - 1:canvasY + 1, canvasX - 1:canvasX + 1] = color
+
+            # if visible to earth but not sun, dark
+            # if s.dot(p_s-p_jer) < 0 and s.dot(p_s-p_sun) >= 0:
+            #     canvasX = round(((x - xMin) / xRange) * canvas_size)
+            #     canvasY = round(((yMax - y) / yRange) * canvas_size)
+            #     if canvasX == 256: canvasX = 255
+            #     if canvasY == 256: canvasY = 255
+            #     imageData[canvasY, canvasX] = [47, 79, 79]
+            #     imageData[canvasY-1:canvasY+1, canvasX-1:canvasX+1] = [47, 79, 79]
+            #
+            # # if visible to earth AND sun, illuminated
+            # elif s.dot(p_s-p_jer) < 0 and s.dot(p_s-p_sun) < 0:
+            #     canvasX = round(((x - xMin) / xRange) * canvas_size)
+            #     canvasY = round(((yMax - y) / yRange) * canvas_size)
+            #     if canvasX == 256: canvasX = 255
+            #     if canvasY == 256: canvasY = 255
+                # imageData[canvasY-1:canvasY+1, canvasX-1:canvasX+1] = [255, 255, 255]
 
     image = Image.fromarray(imageData)
-    # image.show()
+    image.show()
+
     plt.scatter(yellowX, yellowY, color='yellow')
     plt.scatter(blueX, blueY, color='blue')
     return imageData
     # return image
+
+
+def draw_moon2(MJD, cam_axes, p_jer_ecl, imageData, positionsArr):
+    N = 100
+    D_fov = 0.08  # field of view, in radians
+
+    moonColorIm = Image.open('lroc_color_poles_2k.tif')
+    im_array = np.asarray(moonColorIm)
+
+    # moon_x = moon_y = 0
+    # xMin = moon_x - (D_fov/2)
+    # xMax = moon_x + (D_fov/2)
+    # yMin = moon_y - (D_fov/2)
+    # yMax = moon_y + (D_fov/2)
+
+    e_R, e_U = equatorial_to_ecliptic(cam_axes[0]), equatorial_to_ecliptic(cam_axes[1])
+
+    p_moon = get_pos(MJD, 'm', positionsArr)
+    p_earth = get_pos(MJD, 'e', positionsArr)
+    p_sun = get_pos(MJD, 's', positionsArr)
+
+    p_jer = p_earth + p_jer_ecl
+    x_c, y_c, z_c = float(p_moon[0]), float(p_moon[1]), float(p_moon[2])
+    x_p, y_p, z_p = float(p_jer[0]), float(p_jer[1]), float(p_jer[2])
+    n_cam = np.cross(e_U, e_R)
+
+    for i in range(-N, N):
+        for j in range(-N, N):
+
+            # vector pointing from the observer to the i,j'th pixel
+            n_pix = normalize(n_cam + ((i/N) * D_fov/2 * e_R) + ((j/N) * D_fov/2 * e_U))
+            n_x, n_y, n_z = n_pix
+
+            t = symbols('t')
+            expr = ((x_p - x_c + (t*n_x))**2 + (y_p - y_c + (t*n_y))**2 + (z_p - z_c + (t*n_z))**2) - moon_rad**2
+            sol = real_roots(expr)
+
+            a = n_x**2 + n_y**2 + n_z**2
+            b = 2*(n_x*(x_p-x_c) + n_y*(y_p-y_c) + n_z*(z_p-z_c))
+            c = x_p**2 + x_c**2 - (2*x_p*x_c) + y_p**2 + y_c**2 - (2*y_p*y_c) + z_p**2 + z_c**2 - (2*z_p*z_c)
+            discrim = b ** 2 - (4 * a * c)
+            if discrim >= 0:
+                print(discrim)
+                roots = [(-b + np.sqrt(discrim)) / (2 * a),
+                         ((-b - np.sqrt(discrim)) / (2 * a))]
+                print(roots)
+
+            # if there are real roots, then this n_pix must intersect the moon
+            if len(sol):
+                print(sol)
+                sol = np.array([float(sol[0]), float(sol[1])])
+                p_s1 = p_jer + (sol[0] * n_pix)    # points on surface of moon with which n_pix intersects
+                p_s2 = p_jer + (sol[1] * n_pix)
+
+                # convert to phi and theta
+                s1 = p_s1 - p_moon
+                s2 = p_s2 - p_moon
+                r1, phi1, theta1 = cartesian_to_spherical(s1)
+                r2, phi2, theta2 = cartesian_to_spherical(s2)
+
+                # n_moon_jer_equ = ecliptic_to_equatorial(normalize(p_s1 - p_jer))
+                # x, y = n_camera_coords(n_moon_jer_equ, cam_axes)  # camera (x-y) coords
+
+                # plot the point that's visible to the observer
+                if s1.dot(p_s1 - p_jer) < 0:
+                    # map this (phi, theta) point onto the 2D moon-color image
+                    x1 = (2048 * ((phi1 + 180) / 360)) % 2048
+                    y1 = 1024 * (theta1 / 180)
+                    color = im_array[round(y1)][round(x1)]
+
+                    # illuminated?
+                    if s1.dot(p_s1 - p_sun) >= 0:
+                        imageData[j, i] = color / 4
+                    else:
+                        imageData[j, i] = color
+
+                elif s2.dot(p_s2 - p_jer) < 0:
+                    x2 = (2048 * ((phi2 + 180) / 360)) % 2048
+                    y2 = 1024 * (theta2 / 180)
+                    color = im_array[round(y2)][round(x2)]
+
+                    # illuminated?
+                    if s2.dot(p_s2 - p_sun) >= 0:
+                        imageData[j, i] = color / 4
+                    else:
+                        imageData[j, i] = color
+
+    image = Image.fromarray(imageData)
+    image.show()
 
 
 def draw_sun(MJD, cam_axes, p_jer_ecl, imageData, positionsArr):
@@ -1209,26 +1336,156 @@ def draw_sun(MJD, cam_axes, p_jer_ecl, imageData, positionsArr):
     # return image
 
 
-def main():
+# returns array consisting of the angles between the sun, earth, and moon
+def relative_angles(s, e, m):
+    E_M = e - m  # Earth - Moon
+    E_S = e - s  # Earth - Sun
+    M_S = m - s  # Moon - Sun
 
-    day = 21
-    month = 9
-    year = 2023
-    time_zone = 'EST'
+    theta1 = np.arccos(float((E_S.dot(M_S)) / (length(E_S) * length(M_S))))  # angle btwn E-S and M-S
+    theta2 = np.arccos(float((E_S.dot(E_M)) / (length(E_S) * length(E_M))))  # angle btwn E-S and E-M
+    theta3 = np.arccos(float((-E_M.dot(M_S)) / (length(E_M) * length(M_S))))  # angle btwn E-S and E-M
+    return np.array([theta1, theta2, theta3])
 
-    # mjd of date in question (in GMT)
-    MJD = mjd(day, month, year, (0, 0))  # modified julian date
 
-    # MJD = rosh_chodesh_MJD[5][0] + 1.05
+def test_positions(year):
 
-    # array containing positions of sun, earth, and moon as returned from SunEarthMoonPosition.py
     positionsArr = get_positions(year)
+    dailyPositionsArray = get_data()
+
+    # starting at Jan 1, get positions at each day of the year
+    cur_mjd = mjd(1, 1, year, (0, 0))
+
+    num_days = 100
+
+    expected_positions = np.zeros((num_days, 3, 3))    # as per Horizons daily data
+    actual_positions = np.zeros((num_days, 3, 3))      # as per interpolation from yearly Horizons data
+    expected_angles = np.zeros((num_days, 3))
+    actual_angles = np.zeros((num_days, 3))
+
+    for i in range(num_days):
+        expected = get_cur_positions(i, dailyPositionsArray)
+        actual = np.array([get_pos(cur_mjd, 's', positionsArr), get_pos(cur_mjd, 'e', positionsArr), get_pos(cur_mjd, 'm', positionsArr)])
+
+        for j in range(3):
+            for k in range(3):
+                expected_positions[i][j][k] = expected[j][k]
+                actual_positions[i][j][k] = actual[j][k]
+
+        ## compare angles between sun, earth, and moon as obtained from the two position lists
+        s1, e1, m1 = expected   # from expected data
+        s2, e2, m2 = actual     # from actual data
+
+        for j in range(3):
+            expected_angles[i][j] = relative_angles(s1, e1, m1)[j]
+            actual_angles[i][j] = relative_angles(s2, e2, m2)[j]
+
+        cur_mjd += 1   # move to next day
+
+    ## Plot:
+    # # Earth-Sun-Moon Angle
+    x = np.array([i for i in range(len(expected_positions))])
+    # y_exp = np.array([expected_angles[i][0] for i in range(len(expected_angles))])
+    # y_act = np.array([actual_angles[i][0] for i in range(len(actual_angles))])
+    # plt.scatter(x, y_act-y_exp)
+    # # plt.scatter(x, y_act)
+    # plt.title("Earth-Sun-Moon Angle")
+    # plt.show()
+    #
+    # Moon-Earth-Sun Angle
+    y_exp = np.array([expected_angles[i][1] for i in range(len(expected_angles))])
+    y_act = np.array([actual_angles[i][1] for i in range(len(actual_angles))])
+    plt.scatter(x, y_act-y_exp)
+    # plt.scatter(x, y_act)
+    plt.title("Moon-Earth-Sun Angle")
+    plt.show()
+
+    # # Earth-Moon-Sun Angle
+    # y_exp = np.array([expected_angles[i][2] for i in range(len(expected_angles))])
+    # y_act = np.array([actual_angles[i][2] for i in range(len(actual_angles))])
+    # plt.scatter(x, y_act-y_exp)
+    # # plt.scatter(x, y_act)
+    # plt.title("Earth-Moon-Sun Angle")
+    # plt.show()
+
+    # Distance between Moon and Earth
+    t = np.array([i for i in range(len(expected_positions))])
+    p_exp = np.array([expected_positions[i][2]-expected_positions[i][1] for i in range(len(expected_positions))])
+    p_act = np.array([actual_positions[i][2]-actual_positions[i][1] for i in range(len(expected_positions))])
+
+    # really should use cartesian distance / find length of x,y,z difference vector
+    xyz_diffs = p_act - p_exp
+    x_diffs = np.array([xyz_diffs[i][0] for i in range(len(xyz_diffs))])
+    y_diffs = np.array([xyz_diffs[i][1] for i in range(len(xyz_diffs))])
+    z_diffs = np.array([xyz_diffs[i][2] for i in range(len(xyz_diffs))])
+    diff_magnitude = np.array([length(xyz_diffs[i]) for i in range(len(xyz_diffs))])
+
+    # plt.scatter(t, x_diffs)
+    # plt.title("Earth-Moon x-Difference")
+    # plt.show()
+    # plt.scatter(t, y_diffs)
+    # plt.title("Earth-Moon y-Difference")
+    # plt.show()
+    # plt.scatter(t, z_diffs)
+    # plt.title("Earth-Moon z-Difference")
+    # plt.show()
+    plt.scatter(t, diff_magnitude)
+    plt.title("Earth-Moon Distance")
+    plt.show()
+
+    moon_period(t, expected_angles, actual_angles)
+
+
+def moon_period(t, expected_angles, actual_angles):
+    # find points where sun-earth-moon angle is at a minimum (i.e. time of the molad)
+    # use np.diff() to compute moon-period using actual_angles
+
+    molad_times = []
+
+    # extract only sun-earth-moon angles (actual and expected)
+    exp_earth_angles = np.array([expected_angles[i][1] for i in range(len(expected_angles))])
+    act_earth_angles = np.array([actual_angles[i][1] for i in range(len(actual_angles))])
+
+    # lists of differences between each angle in expected and actual angle lists
+    exp_angles_dif = np.diff(exp_earth_angles)
+    act_angles_dif = np.diff(act_earth_angles)
+
+    # identify local minima of list of expected angles --> days on which molad occurs
+    for i in range(len(exp_angles_dif)-1):
+        if exp_angles_dif[i] <= 0 and exp_angles_dif[i+1] >= 0:
+            molad_times.append(t[i+1])
+
+    # numbers of days between each molad
+    month_lens = [molad_times[i]-molad_times[i-1] for i in range(1, len(molad_times))]
+    return np.mean(month_lens)
+
+
+def main():
+    # day = 13
+    # month = 9
+    # year = 2023
+    # time_zone = 'IST'
+
+    year = int(input("Year: "))
+    month = int(input("Month: "))
+    day = int(input("Day: "))
+    hour = int(input("Hour (0-23): "))
+    minutes = float(input("Minutes: "))
+    location = input("Location ('ny' or 'jer'): ")
+
+    if location == "ny":    time_zone = 'EST'
+    elif location == "jer": time_zone = 'IST'
+    else: print("invalid location")
 
     # daylight savings time beginning and end for this year in this time zone
     DST_START, DST_END = DST(time_zone, year)
 
-    # time-difference between local time and GMT
-    time_difference = time_dif(MJD, time_zone, DST_START, DST_END)
+    # mjd of date in question (in GMT)
+    MJD = mjd(day, month, year, (hour, minutes))  # modified julian date
+    MJD -= time_dif(MJD, time_zone, DST_START, DST_END)/24
+
+    # array containing positions of sun, earth, and moon as returned from SunEarthMoonPosition.py
+    positionsArr = get_positions(year)
 
     # print(sunriseSunset(MJD, time_zone, DST_START, DST_END, positionsArr))
 
@@ -1238,4 +1495,7 @@ def main():
 
 
 main()
+
+
+# test_positions(2023)
 
