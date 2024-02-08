@@ -33,7 +33,6 @@ obliquity = 23.43       # degrees
 moon_obliquity = 1.5424  # degrees
 T_side = 27.321661         # sidereal period of the moon, in days
 rotation_phase0 = 217.88   # moon's rotation phase at Epoch 0, in degrees
-# rotation_phase0 = rotation_phase0 + 45  # test factor, 1/3/24
 
 # psi_cam = 90   # camera position for ~8AM
 phi_cam = 259
@@ -157,8 +156,18 @@ def normalize(v):
 def length(v):
     return np.sqrt(float(v.dot(v)))
 
-# normalized position vector from current Jerusalem position to current position of sun/moon
 
+# returns the euclidian distance between two 2D vectors
+def distance(x1, x2, y1, y2):
+    return np.sqrt((x2-x1)**2 + (y2-y1)**2)
+
+
+# returns the angular distance between two vectors
+def angular_dist(v1, v2):
+    return np.arccos(np.dot(v1, v2) / (length(v1) * length(v2)))
+
+
+# normalized position vector from current Jerusalem position to current position of sun/moon
 def n_body_jer(n_jer, p_body):
     p_jer = n_jer * earth_rad
     p_body_jer = p_body - p_jer
@@ -260,8 +269,7 @@ def DST(time_zone, yr):
                 + month_len(8, False) + month_len(9, False))  # days from April, May, June, July, August, September
 
     # date of last Sunday
-    day_of_week_Oct1 = (5 + ((
-                                         DST_END - DST_START + 1) % 7)) % 7  # Friday (day of DST start) + remaining days after complete weeks + 1 to get to Oct 1
+    day_of_week_Oct1 = (5 + ((DST_END - DST_START + 1) % 7)) % 7  # Friday (day of DST start) + remaining days after complete weeks + 1 to get to Oct 1
     if not day_of_week_Oct1:
         date_first_sunday = 1
     else:
@@ -768,11 +776,13 @@ def camera_axes(MJD, p_jer_ecl, positionsArr, obs_axes):
     n_cam = normalize(p_moon-p_jer)
     n_cam = np.array([float(n_cam[0]), float(n_cam[1]), float(n_cam[2])])
 
+    e_N_ecl = np.array([0, 0, 1])
     # camera's position vector in equatorial coords, given psi and psi angles relative to the observer
     # n_cam = n_from_observer_angles(psi_cam, phi_cam, obs_axes)
 
     # Right and Up axis vectors (normalized)
-    e_R = np.cross(n_cam, e_Z_ecl)
+    # e_R = np.cross(n_cam, e_Z_ecl)
+    e_R = np.cross(n_cam, e_N_ecl)
     e_R_normal = normalize(e_R)
 
     e_U = np.cross(e_R_normal, n_cam)
@@ -959,17 +969,20 @@ def plot_sun_moon(MJD, cam_axes, n_jer_ecl, n_sun_jer_ecl, positionsArr):
 
 
 def drawHorizon(cam_axes, n_jer_equ):
-    # n_cam = np.cross(cam_axes[1], cam_axes[0])
     n_cam = cam_axes[2]
+
     e_Z = equatorial_to_ecliptic(n_jer_equ)
-    e_R = cam_axes[0]
-    e_F = np.cross(e_Z, e_R)
+    e_R = np.cross(n_cam, e_Z)
+    e_R_normal = normalize(e_R)
+
+    e_F = np.cross(e_Z, e_R_normal)
+    e_F_normal = normalize(e_F)
 
     points = []
 
-    for i in range(0, 360, 1):
+    for i in range(0, 360):
         psi = i * np.pi/180
-        p = (e_R * np.cos(psi)) + (e_F * np.sin(psi))
+        p = (e_R_normal * np.cos(psi)) + (e_F_normal * np.sin(psi))
         x, y = n_camera_coords(p, cam_axes)  # in camera coords
 
         if p.dot(n_cam) > 0:  # if visible
@@ -1011,58 +1024,52 @@ def RA_Dec_lines(cam_axes, p_jer_equ, imageData):
     for i in range(0, 180, 30):
         theta = i * np.pi/180
         points = []
-        for j in range(0, 360):  # starting abt 90 degrees east of phi_jer
-            # account for earth's rotation??
-
+        vectors = []
+        for j in range(0, 360):
             phi = j * np.pi / 180
 
             # Project this point onto x/y plane (i.e. convert to camera coordinates)
             n_equ = n_spherical_to_cartesian(theta, phi)  # unit position vector (centered at earth's center)
             p_equ = celestial_rad * n_equ                 # scaled up by radius of celestial sphere
-
-            # angleFromCam = acos((n_equ.dot(n_cam))/(np.sqrt(n_equ.dot(n_equ))*np.sqrt(n_cam.dot(n_cam))))
-            # print(angleFromCam)
-            n_ecl = equatorial_to_ecliptic(n_equ)
-            x, y = n_camera_coords(n_ecl, cam_axes)       # in camera coords
+            n_ecl = equatorial_to_ecliptic(n_equ)         # unit position vector in ecliptic coordinates
+            x, y = n_camera_coords(n_ecl, cam_axes)       # finally, in camera coords
 
             if p_equ.dot(p_jer_equ) > 0 and n_equ.dot(n_cam) > 0:  # if visible
                 points.append([x, y])
-                # canvasX = round(((x - xMin) / xRange) * canvas_size)
-                # canvasY = round(((y - yMin) / yRange) * canvas_size)
-                # if canvasX == 256: canvasX = 255
-                # if canvasY == 256: canvasY = 255
-                # if 0 < canvasX < 256 and 0 < canvasY < 256:
-                #     imageData[canvasX, canvasY] = [255, 255, 255]
+                vectors.append(p_equ)
 
-        for j in range(len(points)-1):
-            plt.plot([points[j][0], points[j + 1][0]], [points[j][1], points[j + 1][1]], 'k-')
+        # draw line connecting each of the visible points as long as the two points are not on opposite sides of the sphere
+        for j in range(len(points) - 1):
+            ang_dist = angular_dist(vectors[j], vectors[j+1])   # in radians
+            ang_dist = ang_dist * 180/np.pi                     # in degrees
+            if ang_dist < 2:
+                plt.plot([points[j][0], points[j + 1][0]], [points[j][1], points[j + 1][1]], 'k-')
 
     # DECLINATION LINES
     # phi is held constant; theta varies
     for i in range(0, 361, 30):
         phi = i * np.pi / 180
         points = []
+        vectors = []
         for j in range(0, 181):
             theta = j * np.pi / 180
 
             # Project this point onto x/y plane (i.e. convert to camera coordinates)
             n_equ = n_spherical_to_cartesian(theta, phi)  # unit position vector (centered at earth's center)
-            p_equ = celestial_rad * n_equ            # scaled up by radius of celestial sphere
-
-            n_ecl = equatorial_to_ecliptic(n_equ)
-            x, y = n_camera_coords(n_ecl, cam_axes)  # in camera coords
+            p_equ = celestial_rad * n_equ                 # scaled up by radius of celestial sphere
+            n_ecl = equatorial_to_ecliptic(n_equ)         # unit position vector in ecliptic coordinates
+            x, y = n_camera_coords(n_ecl, cam_axes)       # finally, in camera coords
 
             if p_equ.dot(p_jer_equ) > 0 and n_equ.dot(n_cam) > 0:  # if visible
                 points.append([x, y])
-                # canvasX = round(((x - xMin) / xRange) * canvas_size)
-                # canvasY = round(((y - yMin) / yRange) * canvas_size)
-                # if canvasX == 256: canvasX = 255
-                # if canvasY == 256: canvasY = 255
-                # if 0 < canvasX < 256 and 0 < canvasY < 256:
-                #     imageData[canvasX, canvasY] = [255, 255, 255]
+                vectors.append(p_equ)
 
+            # draw line connecting each of the visible points as long as the two points are not on opposite sides of the sphere
         for j in range(len(points) - 1):
-            plt.plot([points[j][0], points[j + 1][0]], [points[j][1], points[j + 1][1]], 'k-', markersize=1)
+            ang_dist = angular_dist(vectors[j], vectors[j + 1])  # in radians
+            ang_dist = ang_dist * 180 / np.pi  # in degrees
+            if ang_dist < 2:
+                plt.plot([points[j][0], points[j + 1][0]], [points[j][1], points[j + 1][1]], 'k-')
 
     # plt.show()
     return imageData
@@ -1079,8 +1086,9 @@ def moving_RA_Dec(MJD, phi_dif, theta, positionsArr):
     for file in os.scandir(dir2):
         os.remove(file.path)
 
-    for interval in range(1):
+    for i in range(30):
         # MJD += 1/480  # every 3 min
+        print(i)
         MJD += 1
         n_jer_ecl, n_jer_equ, n_sun_jer_ecl, n_sun_jer_equ = zenithAndSunVectors(MJD, phi_dif, theta, positionsArr)
 
@@ -1101,16 +1109,16 @@ def moving_RA_Dec(MJD, phi_dif, theta, positionsArr):
         # imageData = draw_sun(MJD, cam_axes, n_jer_ecl*earth_rad, imageData, positionsArr)
         # draw_moon(MJD, cam_axes, n_jer_ecl*earth_rad, moon_coords, imageData, positionsArr)
 
-        draw_moon2(MJD, cam_axes, n_jer_ecl*earth_rad, positionsArr, interval)
+        draw_moon2(MJD, cam_axes, n_jer_ecl*earth_rad, positionsArr, i)
 
         plt.title("MJD:" + str(MJD))
         plt.xlabel("Right", fontfamily="times new roman")
         plt.ylabel("Up", fontfamily="times new roman")
 
         plt.show()
-        f.savefig("./Plots/"+str(interval))
+        f.savefig("./Plots/"+str(i))
 
-    # movie("MoonImages", "MoonImage")
+    movie("MoonImages", "MoonImage")
 
 
 def natural_sort_key(s, _nsre=re.compile('([0-9]+)')):
@@ -1244,9 +1252,9 @@ def rot_moon_axis(e, rotation_phase, eps=moon_obliquity):
 
 def rotated_moon_axes(mjd_cur, eps=moon_obliquity):
 
-    em_z = np.array([0, -np.sin(eps), np.cos(eps)])
     em_x = np.array([1, 0, 0])
     em_y = np.array([0, np.cos(eps), np.sin(eps)])
+    em_z = np.array([0, -np.sin(eps), np.cos(eps)])
 
     mjd_epoch = mjd(1, 1, 2000, (0, 0))
     days_since_epoch = mjd_cur - mjd_epoch
@@ -1263,7 +1271,7 @@ def rotated_moon_axes(mjd_cur, eps=moon_obliquity):
 
 def draw_moon2(MJD, cam_axes, p_jer_ecl, positionsArr, image_num):
 
-    N = 200
+    N = 100
     D_fov = 0.015  # field of view, in radians
     canvas_size = (2*N) + 1
     imageData = np.zeros((canvas_size, canvas_size, 3), dtype=np.uint8)
@@ -1274,16 +1282,14 @@ def draw_moon2(MJD, cam_axes, p_jer_ecl, positionsArr, image_num):
     # moon axes rotated around the current phase angle
     es_x, es_y, es_z = rotated_moon_axes(MJD)
 
-    # e_R, e_U = equatorial_to_ecliptic(cam_axes[0]), equatorial_to_ecliptic(cam_axes[1])
-    e_R, e_U = cam_axes[0], cam_axes[1]     # in equatorial coords??
+    e_R, e_U, n_cam = cam_axes
     p_moon = get_pos(MJD, 'm', positionsArr)
     p_earth = get_pos(MJD, 'e', positionsArr)
     p_sun = get_pos(MJD, 's', positionsArr)
 
-    p_jer = p_earth + p_jer_ecl
+    p_jer_solsys = p_earth + p_jer_ecl  # position of jer relative to the center of the solar system
     x_c, y_c, z_c = float(p_moon[0]), float(p_moon[1]), float(p_moon[2])
-    x_p, y_p, z_p = float(p_jer[0]), float(p_jer[1]), float(p_jer[2])
-    n_cam = np.cross(e_U, e_R)
+    x_p, y_p, z_p = float(p_jer_solsys[0]), float(p_jer_solsys[1]), float(p_jer_solsys[2])
 
     for i in range(-N, N):
         for j in range(-N, N):
@@ -1303,11 +1309,11 @@ def draw_moon2(MJD, cam_axes, p_jer_ecl, positionsArr, image_num):
                 roots = [(-b + np.sqrt(discrim)) / (2 * a),
                          ((-b - np.sqrt(discrim)) / (2 * a))]
 
+                # points on surface of moon with which n_pix intersects
+                p_s1 = p_jer_solsys + (roots[0] * n_pix)
+                p_s2 = p_jer_solsys + (roots[1] * n_pix)
 
-                p_s1 = p_jer + (roots[0] * n_pix)  # points on surface of moon with which n_pix intersects
-                p_s2 = p_jer + (roots[1] * n_pix)
-
-                # vectors from center of the moon to the points on its surface
+                # vectors from center of the moon to those points on its surface
                 s1 = p_s1 - p_moon
                 s2 = p_s2 - p_moon
 
@@ -1315,12 +1321,12 @@ def draw_moon2(MJD, cam_axes, p_jer_ecl, positionsArr, image_num):
                 s1_rotated = np.array([np.dot(s1, es_x), np.dot(s1, es_y), np.dot(s1, es_z)])
                 s2_rotated = np.array([np.dot(s2, es_x), np.dot(s2, es_y), np.dot(s2, es_z)])
 
-                # convert to phi and theta
+                # convert them to phi and theta
                 r1, phi1, theta1 = cartesian_to_spherical(s1_rotated)
                 r2, phi2, theta2 = cartesian_to_spherical(s2_rotated)
 
                 # plot the point that's visible to the observer
-                if s1.dot(p_s1 - p_jer) < 0:
+                if s1.dot(p_s1 - p_jer_solsys) < 0:
                     # map this (phi, theta) point onto the 2D moon-color image
                     x1 = (2048 * ((phi1 + 2*np.pi) / (2*np.pi))) % 2048
                     y1 = 1024 * (theta1 / np.pi)
@@ -1332,15 +1338,9 @@ def draw_moon2(MJD, cam_axes, p_jer_ecl, positionsArr, image_num):
                     else:
                         imageData[N-j, i+N] = color
 
-                    # if j == 0:
-                    #     print("s1", i, theta1, phi1, x1, y1)
-
-                elif s2.dot(p_s2 - p_jer) < 0:
+                elif s2.dot(p_s2 - p_jer_solsys) < 0:
                     x2 = (2048 * ((phi2 + 2*np.pi) / (2 * np.pi))) % 2048
                     y2 = 1024 * (theta2 / np.pi)
-
-                    # if j == 0:
-                    #     print("s2", i, theta2, phi2, x2, y2)
 
                     color = im_array[int(y2)][int(x2)]
 
@@ -1353,7 +1353,7 @@ def draw_moon2(MJD, cam_axes, p_jer_ecl, positionsArr, image_num):
     image = Image.fromarray(imageData)
     file_name = "./MoonImages/" + str(image_num) + ".png"
     image.save(file_name)
-    image.show()
+    # image.show()
 
 
 def draw_sun(MJD, cam_axes, p_jer_ecl, imageData, positionsArr):
@@ -1403,9 +1403,9 @@ def relative_angles(s, e, m):
     E_S = e - s  # Earth - Sun
     M_S = m - s  # Moon - Sun
 
-    theta1 = np.arccos(float((E_S.dot(M_S)) / (length(E_S) * length(M_S))))  # angle btwn E-S and M-S
-    theta2 = np.arccos(float((E_S.dot(E_M)) / (length(E_S) * length(E_M))))  # angle btwn E-S and E-M
-    theta3 = np.arccos(float((-E_M.dot(M_S)) / (length(E_M) * length(M_S))))  # angle btwn E-S and E-M
+    theta1 = np.arccos(float((E_S.dot(M_S)) / (length(E_S) * length(M_S))))  # angle between E-S and M-S
+    theta2 = np.arccos(float((E_S.dot(E_M)) / (length(E_S) * length(E_M))))  # angle between E-S and E-M
+    theta3 = np.arccos(float((-E_M.dot(M_S)) / (length(E_M) * length(M_S))))  # angle between E-S and E-M
     return np.array([theta1, theta2, theta3])
 
 
@@ -1536,7 +1536,9 @@ def main():
 
     if location == "ny":    time_zone = 'EST'
     elif location == "jer": time_zone = 'IST'
-    else: print("invalid location")
+    else:
+        print("invalid location")
+        return
 
     # daylight savings time beginning and end for this year in this time zone
     DST_START, DST_END = DST(time_zone, year)
