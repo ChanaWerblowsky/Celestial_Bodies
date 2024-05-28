@@ -15,6 +15,7 @@ from CalendarUtilities import mjd, isLeap
 
 def processData(year):
 
+    # open and read in ephemeris files as strings
     sunData = open("./sun_ephemeris.txt")
     earthData = open("./earth_ephemeris.txt")
     moonData = open("./moon_ephemeris.txt")
@@ -23,6 +24,7 @@ def processData(year):
     earthTxt = earthData.read()
     moonTxt = moonData.read()
 
+    # extract sun/moon/earth positions for the current year
     startPat = str(year) + "-Jan-01"
     endPat = str(year+1) + "-Jan-01"
     cur_yr_regex = fr"(?:SOE[\s\S]*)({startPat}[\s\S]*X=[\s\S]*)(?:{endPat})"
@@ -31,14 +33,15 @@ def processData(year):
     curEarthData = re.search(cur_yr_regex, earthTxt).groups()[0]
     curMoonData = re.search(cur_yr_regex, moonTxt).groups()[0]
 
+    # for the current year's Earth data:
     curSunData = re.sub(r'\n', '', curSunData)  # get rid of newline characters
     curSunDataList = re.split(r' *[A-Z]{1,2} ?= ?', curSunData)[1:]  # split into fields
 
-    # repeat for the current year's Earth data
+    # for the current year's Earth data:
     curEarthData = re.sub(r'\n', '', curEarthData)  # get rid of newline characters
     curEarthDataList = re.split(r' *[A-Z]{1,2} ?= ?', curEarthData)[1:]  # split into fields
 
-    # repeat for the current year's Moon data
+    # for the current year's Moon data:
     curMoonData = re.sub(r'\n', '', curMoonData)  # get rid of newline characters
     curMoonDataList = re.split(r' *[A-Z]{1,2} ?= ?', curMoonData)[1:]  # split into fields
 
@@ -122,26 +125,7 @@ def DV(y):
             if (i != j):
                 Fi_[i] += -G * Mi[i] * Mi[j] * rij_[i, j] / rij[i, j] ** 3.
     dp = Fi_
-    return (dp)
-
-
-# def advanceSy2(y, dt):
-#     c1 = 0.0
-#     c2 = 1.0
-#     d1 = 0.5
-#     d2 = 0.5
-#     yn = np.array(y)
-#
-#     dx = DT(yn)
-#     yn[0] = yn[0] + dt * c1 * dx
-#     dp = DV(yn)
-#     yn[1] = yn[1] + dt * d1 * dp
-#     dx = DT(yn)
-#     yn[0] = yn[0] + dt * c2 * dx
-#     dp = DV(yn)
-#     yn[1] = yn[1] + dt * d2 * dp
-#     #  print(dt*d2*dp)
-#     return (yn)
+    return dp
 
 
 def advanceSy4(y, dt):
@@ -192,7 +176,8 @@ Mi[:] = (M_SUN, M_EARTH, M_MOON)
 Mtotal = np.sum(Mi)
 
 
-# Returns an array consisting of Sun, Earth, and Moon coordinates at Nt times throughout the year
+# Returns an array consisting of Sun, Earth, and Moon x, y, z coordinates at Nt times throughout the year
+# (each element has shape 4 elements where the last three are themselves each a list of 3)
 def get_positions(year):
 
     T0 = mjd(1, 1, year, (0, 0))  # MJD of the first day of the given year
@@ -213,8 +198,7 @@ def get_positions(year):
 
         yn = advanceSy4(yn, dt)
         yi_t[it + 1] = yn
-        # print(tt[it],yi_t[it,0,0],yi_t[it,0,1],yi_t[it,0,2])
-        positionsArr.append([tt[it],yi_t[it,0,0],yi_t[it,0,1],yi_t[it,0,2]])
+        positionsArr.append([tt[it], yi_t[it, 0, 0], yi_t[it, 0, 1], yi_t[it, 0, 2]])
 
     return positionsArr
 
