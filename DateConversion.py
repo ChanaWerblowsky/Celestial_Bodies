@@ -181,115 +181,84 @@ def hebrew_year_type(molad_tishrei, year_of_lunar_cycle, leap):
     # Molad category #1
     if is_later(molad_tishrei, molad_intervals[0]) or not is_later(molad_tishrei, molad_intervals[1]):
 
-        if leap:
-            return 2, 'd', 5
-
         # Both non-leap years and leap years are deficient
+        if leap: return 2, 'd', 5
         return 2, 'd', 3
 
     # Molad category #2
     if is_later(molad_tishrei, molad_intervals[1]) and not is_later(molad_tishrei, molad_intervals[2]):
 
         # Non-leap years are abundant, leap years are deficient
-        if leap:
-            return 2, 'd', 5
-
+        if leap: return 2, 'd', 5
         return 2, 'c', 5
 
     # Molad category #3
     if is_later(molad_tishrei, molad_intervals[2]) and not is_later(molad_tishrei, molad_intervals[3]):
 
         # Both leap years and non-leap years are abundant
-
-        if leap:
-            return 2, 'c', 7
-
+        if leap: return 2, 'c', 7
         return 2, 'c', 5
 
     # Molad category #4
     if is_later(molad_tishrei, molad_intervals[3]) and not is_later(molad_tishrei, molad_intervals[4]):
 
-        if leap:  # if leap year
-            return 2, 'c', 7
-
-        if year_of_lunar_cycle in [2, 5, 10, 13, 16]:
-            return 2, 'c', 5
-
+        if leap: return 2, 'c', 7
+        if year_of_lunar_cycle in [2, 5, 10, 13, 16]: return 2, 'c', 5
         return 3, 'r', 5
 
     # Molad category #5
     if is_later(molad_tishrei, molad_intervals[4]) and not is_later(molad_tishrei, molad_intervals[5]):
 
-        if leap:
-            return 3, 'r', 7
-
+        if leap: return 3, 'r', 7
         return 3, 'r', 5
 
     # Molad category #6
     if is_later(molad_tishrei, molad_intervals[5]) and not is_later(molad_tishrei, molad_intervals[6]):
 
-        if leap:
-            return 3, 'r', 7
-
+        if leap: return 3, 'r', 7
         return 5, 'r', 7
 
     # Molad category #7
     if is_later(molad_tishrei, molad_intervals[6]) and not is_later(molad_tishrei, molad_intervals[7]):
 
-        if leap:
-            return 5, 'd', 1
-
+        if leap: return 5, 'd', 1
         return 5, 'r', 7
 
     # Molad category #8
     if is_later(molad_tishrei, molad_intervals[7]) and not is_later(molad_tishrei, molad_intervals[8]):
 
-        if leap:
-            return 5, 'c', 3
-
+        if leap: return 5, 'c', 3
         return 5, 'r', 7
 
     # Molad category #9
     if is_later(molad_tishrei, molad_intervals[8]) and not is_later(molad_tishrei, molad_intervals[9]):
 
-        if leap:
-            return 5, 'c', 3
-
+        if leap: return 5, 'c', 3
         return 5, 'c', 1
 
     # Molad category #10
     if is_later(molad_tishrei, molad_intervals[9]) and not is_later(molad_tishrei, molad_intervals[10]):
 
-        if leap:
-            return 7, 'd', 3
-
+        if leap: return 7, 'd', 3
         return 7, 'd', 1
 
     # Molad category #11
     if is_later(molad_tishrei, molad_intervals[10]) and not is_later(molad_tishrei, molad_intervals[11]):
 
-        if leap:
-            return 7, 'd', 3
-
-        if year_of_lunar_cycle in [1, 4, 9, 12, 15]:
-            return 7, 'c', 3
-
+        if leap: return 7, 'd', 3
+        if year_of_lunar_cycle in [1, 4, 9, 12, 15]: return 7, 'c', 3
         return 7, 'd', 1
 
     # Molad category #12
     if is_later(molad_tishrei, molad_intervals[11]) and not is_later(molad_tishrei, molad_intervals[12]):
 
-        if leap:
-            return 7, 'd', 3
-
+        if leap: return 7, 'd', 3
         return 7, 'c', 3
 
     # Molad category #13
     if is_later(molad_tishrei, molad_intervals[12]) and not is_later(molad_tishrei, molad_intervals[0]):
 
-        if leap:
-            return 7, 'c', 5
-
+        if leap: return 7, 'c', 5
         return 7, 'c', 3
 
 
@@ -587,8 +556,6 @@ def greg_to_hebrew(day, month, year):
 
 # Given tuple representing either a hebrew or gregorian dd/mm/yy, returns tuple representing date in other calendar
 def convert():
-
-    # gregorian_years, hebrew_years = year_lists()
 
     # get calendar type from user
     date_type = (input("Is this a Hebrew or Gregorian date? (Enter 'h' or 'g') ")).lower()
