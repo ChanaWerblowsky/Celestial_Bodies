@@ -7,7 +7,8 @@ import cv2
 import glob
 import re
 import os
-from DateConversion import year_lists
+from DateConversion import year_lists, molad_determination, \
+    time_addition, time_multiplication, LEAP_YEARS, greg_to_hebrew, hebrew_to_greg, len_hebrew_month
 from SunEarthMoonPosition import get_positions
 from PIL import Image
 from CalendarUtilities import month_len, isLeap, mjd
@@ -25,6 +26,9 @@ equinox_time = (15, 33)     # GMT
 mjd_equinox = 59658.64791666667
 phi_jer = 35.214        # degrees
 phi_ny = -74.006        # degrees
+phi_texas = -97.7431
+# theta_texas = 59.7328
+theta_texas = 57.3
 theta_jer = 58.232      # degrees
 theta_ny = 49.3         # degrees
 dayNum_mjdEpoch = 2052005
@@ -33,13 +37,19 @@ obliquity = 23.43       # degrees
 moon_obliquity = 1.5424  # degrees
 T_side = 27.321661         # sidereal period of the moon, in days
 rotation_phase0 = 217.88   # moon's rotation phase at Epoch 0, in degrees
+avg_month_len = 29 + (12 / 24) + ((793 / 1080) / 24)
 
 # psi_cam = 90   # camera position for ~8AM
-phi_cam = 245
+# phi_cam = 140
 # psi_cam = 0.1  # camera position for ~12PM
 # phi_cam = 180
-psi_cam = 88  # camera position for ~6PM
-# phi_cam = 205
+
+## 3/10/24:
+psi_cam = 86
+phi_cam = 262
+## 6/6/24 from 7:30-9:30pm in ny:
+# psi_cam = 86
+# phi_cam = 300
 canvas_size = 256
 
 
@@ -47,8 +57,10 @@ canvas_size = 256
 radians_day = degrees_day * np.pi/180
 phi_jer = phi_jer * np.pi/180
 phi_ny = phi_ny * np.pi/180
+phi_texas = phi_texas * np.pi/180
 theta_jer = theta_jer * np.pi/180
 theta_ny = theta_ny * np.pi/180
+theta_texas = theta_texas * np.pi/180
 sunset_angle = sunset_angle * np.pi/180
 obliquity = obliquity * np.pi/180
 moon_obliquity = moon_obliquity * np.pi/180
@@ -96,7 +108,7 @@ def get_pos(MJD, body, positionsArr):
 
     # tstart, tstop, Nt = SunEarthMoonPosition.tstart, SunEarthMoonPosition.tstop, SunEarthMoonPosition.Nt
     tstart = positionsArr[0][0]  # mjd of Jan 1 of this year
-    tstop = tstart + 366
+    tstop = positionsArr[-1][0]
     Nt = len(positionsArr) + 1
 
     # determine where the given MJD lies relative to the list of mjd/position data points
@@ -106,7 +118,7 @@ def get_pos(MJD, body, positionsArr):
 
     # go to the estimated index and adjust if necessary
     data = positionsArr[est_index]
-    # print(data)
+
     while MJD < data[0]:                        # if MJD is lower than current entry, move backward
         est_index -= 1
         data = positionsArr[est_index]
@@ -164,7 +176,7 @@ def distance(x1, x2, y1, y2):
 
 # returns the angular distance between two vectors
 def angular_dist(v1, v2):
-    return np.arccos(np.dot(v1, v2) / (length(v1) * length(v2)))
+    return np.arccos(float((np.dot(v1, v2) / (length(v1) * length(v2)))))
 
 
 # normalized position vector from current Jerusalem position to current position of sun/moon
@@ -202,6 +214,10 @@ def phiDifAndTheta(time_zone):
     elif time_zone == 'EST':
         phi_dif = phi_ny
         theta = theta_ny
+    elif time_zone == 'CST':
+        phi_dif = phi_texas
+        theta = theta_texas
+
     # elif time_zone == 'GMT':
     #     phi_dif = 0
     #     theta = 0
@@ -215,7 +231,7 @@ def DST(time_zone, yr):
     if time_zone == 'IST':
         dst_start_day_of_week = (0, 'last')  # really starts on Fri before last Sunday
 
-    elif time_zone == 'EST':
+    elif time_zone == 'EST' or time_zone == 'CST':
         dst_start_day_of_week = (0, 2)  # starts on second Sunday in March
 
     # determine MJD of Friday before last Sunday in March of the given year
@@ -294,6 +310,10 @@ def time_dif(MJD, time_zone, DST_START, DST_END):
     elif time_zone == 'EST':
         standard_time_dif = -5
         daylight_time_dif = -4
+
+    elif time_zone == 'CST':
+        standard_time_dif = -6
+        daylight_time_dif = -5
 
     elif time_zone == 'GMT':
         return 0
@@ -532,17 +552,16 @@ def psi_vs_time(MJD, time_zone, dst_start, dst_end, positionsArr, time_step=0.01
     return x, y
 
 
-def solar_noon(polynomial, hr):
+def critical_point(polynomial, hr, interval=1.0):
 
     X = symbols('X')
 
     # take derivative of given polynomial; check if x value lies within given hour-range
     derivative = diff(polynomial, X)
-
     critical_points = solveset(derivative, X)
 
     for cp in critical_points:
-        if hr <= cp <= hr + 1:  # if the time falls within the given hour
+        if hr <= cp <= hr + interval:  # if the time falls within the given hour
             return cp
 
     return ''
@@ -582,10 +601,8 @@ def sunriseSunset(MJD, time_zone, dst_start, dst_end, positionsArr):
         #####################
 
         # get time of solar noon
-        potential_noon = solar_noon(polynomial+sunset_angle, i)
-
-        if potential_noon:
-            noon = float(potential_noon)
+        potential_noon = critical_point(polynomial+sunset_angle, i)
+        if potential_noon:  noon = float(potential_noon)
 
         # for each of the roots, check whether it's real and it falls within the given hour
         roots = solveset(polynomial, X)
@@ -763,7 +780,7 @@ def psi_vs_phi(year, hour, time_zone, time_difference, positionsArr, start_day=1
 
 
 # set up Right and Up axes given the angles of the camera (relative to the observer)
-def camera_axes(MJD, p_jer_ecl, positionsArr, obs_axes):
+def camera_axes(MJD, p_jer_ecl, positionsArr, obs_axes, center_moon=True):
 
     e_N_equ, e_E_equ, e_Z_equ = obs_axes
     e_Z_ecl = equatorial_to_ecliptic(e_Z_equ)
@@ -775,12 +792,14 @@ def camera_axes(MJD, p_jer_ecl, positionsArr, obs_axes):
 
     # camera vector (ecliptic coords)
     # 1. centered at the moon
-    n_cam = normalize(p_moon-p_jer)
-    n_cam = np.array([float(n_cam[0]), float(n_cam[1]), float(n_cam[2])])
+    if center_moon:
+        n_cam = normalize(p_moon-p_jer)
+        n_cam = np.array([float(n_cam[0]), float(n_cam[1]), float(n_cam[2])])
 
     # 2. according to user-defined camera angles
-    n_cam_equ = n_from_observer_angles(psi_cam, phi_cam, obs_axes)
-    n_cam = equatorial_to_ecliptic(n_cam_equ)
+    else:
+        n_cam_equ = n_from_observer_angles(psi_cam, phi_cam, obs_axes)
+        n_cam = equatorial_to_ecliptic(n_cam_equ)
 
     # Right and Up axis vectors (normalized)
     e_R = np.cross(n_cam, e_Z_ecl)      # relative to the zenith
@@ -967,10 +986,10 @@ def plot_sun_moon(MJD, cam_axes, n_jer_ecl, n_sun_jer_ecl, positionsArr):
     moon_x, moon_y = n_camera_coords(n_moon_jer_ecl, cam_axes)
 
     # plot
-    if n_sun_jer_ecl.dot(n_cam) > 0 and np.dot(n_sun_earth, n_jer_ecl) > 0:
+    if n_sun_jer_ecl.dot(n_cam) > 0:  # and np.dot(n_sun_earth, n_jer_ecl) > 0:
         plt.scatter(sun_x, sun_y, color='orange', s=400, marker='*')
 
-    if n_moon_jer_ecl.dot(n_cam) > 0 and np.dot(normalize(p_moon_earth_ecl), n_jer_ecl) > 0:
+    if n_moon_jer_ecl.dot(n_cam) > 0:  # and np.dot(normalize(p_moon_earth_ecl), n_jer_ecl) > 0:
         plt.scatter(moon_x, moon_y, color='blue', s=50, marker='.')
 
     return [sun_x, sun_y], [moon_x, moon_y]
@@ -1002,17 +1021,9 @@ def drawHorizon(cam_axes, n_jer_equ):
 
 def RA_Dec_lines(cam_axes, p_jer_equ, imageData):
 
-    xMin = -0.999
-    xMax = 0.999
-    xRange = xMax - xMin
-    yMin = -0.999
-    yMax = 0.999
-    yRange = yMax - yMin
-    # xMin = -0.01
-    # xMax = 0.01
+    # xMin = yMin = -0.999
+    # xMax = yMax = 0.999
     # xRange = xMax - xMin
-    # yMin = -0.01
-    # yMax = 0.01
     # yRange = yMax - yMin
 
     n_cam = cam_axes[2]
@@ -1020,8 +1031,10 @@ def RA_Dec_lines(cam_axes, p_jer_equ, imageData):
     # set plot axis boundaries
     # plt.xlim(-0.25, 0.25)
     # plt.ylim(-0.25, 0.25)
-    plt.xlim(-1, 1)
-    plt.ylim(-1, 1)
+    # plt.xlim(-1, 1)
+    # plt.ylim(-1, 1)
+    plt.xlim(-0.75, 0.75)
+    plt.ylim(-0.75, 0.75)
     plt.gca().set_aspect('equal', adjustable='box')
 
     # plot horizon
@@ -1086,32 +1099,33 @@ def RA_Dec_lines(cam_axes, p_jer_equ, imageData):
 def moving_RA_Dec(MJD, phi_dif, theta, positionsArr, total_days, steps_per_day):
 
     # clear out the folder from previous runs
-    dir1 = 'C:/Users/tywer/Documents/Celestial Coordinates/Plots'
-    dir2 = 'C:/Users/tywer/Documents/Celestial Coordinates/MoonImages'
-    dir3 = 'C:/Users/tywer/Documents/Celestial Coordinates/SunImages'
-    for file in os.scandir(dir1):
-        os.remove(file.path)
+    # dir1 = 'C:/Users/tywer/Documents/Celestial Coordinates/Plots'
+    # dir2 = 'C:/Users/tywer/Documents/Celestial Coordinates/MoonImages'
+    # for file in os.scandir(dir1):
+    #     os.remove(file.path)
+    #
+    # for file in os.scandir(dir2):
+    #     os.remove(file.path)
 
-    for file in os.scandir(dir2):
-        os.remove(file.path)
-
-    for file in os.scandir(dir3):
-        os.remove(file.path)
+    N = 50
+    # D_fov = 0.05  # field of view, in radians
+    D_fov = 0.1  # field of view, in radians
+    sun_trail = []
+    moon_trail = []
 
     num_iterations = int(total_days * steps_per_day)
     for i in range(num_iterations):
-        # MJD += 1/480  # every 3 min
         print(i)
-        # MJD += (1/steps_per_day)
         n_jer_ecl, n_jer_equ, n_sun_jer_ecl, n_sun_jer_equ = zenithAndSunVectors(MJD, phi_dif, theta, positionsArr)
 
         # set up OBSERVER axes according to current position of Jerusalem
         obs_axes = observer_axes(n_jer_equ)
 
         # now, set up CAMERA axes using observer axes and given position of camera
-        cam_axes = camera_axes(MJD, n_jer_ecl*earth_rad, positionsArr, obs_axes)
+        cam_axes = camera_axes(MJD, n_jer_ecl*earth_rad, positionsArr, obs_axes, center_moon=False)
 
-        # finally, draw RA and Dec lines and sun/moon
+        ############
+        # now we can plot RA and Dec lines and sun/moon
         imageData = np.zeros((canvas_size, canvas_size, 3), dtype=np.uint8)
 
         f = plt.figure()
@@ -1119,22 +1133,35 @@ def moving_RA_Dec(MJD, phi_dif, theta, positionsArr, total_days, steps_per_day):
 
         sun_coords, moon_coords = plot_sun_moon(MJD, cam_axes, n_jer_ecl, n_sun_jer_ecl, positionsArr)
         imageData = RA_Dec_lines(cam_axes, n_jer_equ * earth_rad, imageData)
-        # imageData = draw_sun(MJD, cam_axes, n_jer_ecl*earth_rad, imageData, positionsArr)
-        # draw_moon(MJD, cam_axes, n_jer_ecl*earth_rad, moon_coords, imageData, positionsArr)
-
-        imageData = draw_moon2(MJD, cam_axes, n_jer_ecl*earth_rad, positionsArr, i)
-        draw_sun2(MJD, cam_axes, n_jer_ecl*earth_rad, positionsArr, i, imageData)
-
 
         plt.title("MJD:" + str(MJD))
         plt.xlabel("Right", fontfamily="times new roman")
         plt.ylabel("Up", fontfamily="times new roman")
 
         # plt.show()
-        f.savefig("./Plots/"+str(i))
-        MJD += (1/steps_per_day)
+        f.savefig("./SkyMaps/"+str(i))
+        plt.close()
 
-    movie("MoonImages", "MoonImage")
+        ############
+        ## Now DRAW sun and moon
+        # imageData = draw_sun(MJD, cam_axes, n_jer_ecl*earth_rad, imageData, positionsArr)
+        # draw_moon(MJD, cam_axes, n_jer_ecl*earth_rad, moon_coords, imageData, positionsArr)
+        imageData, sun_trail = draw_sun2(MJD, cam_axes, n_jer_ecl * earth_rad, positionsArr, N, D_fov, sun_trail, i)
+        moon_trail = draw_moon2(MJD, cam_axes, n_jer_ecl * earth_rad, positionsArr, imageData, N, D_fov, moon_trail, i)
+        #############
+
+        p_moon = get_pos(MJD, 'm', positionsArr)
+        p_earth = get_pos(MJD, 'e', positionsArr)
+        p_sun = get_pos(MJD, 's', positionsArr)
+        p_jer = p_earth + (n_jer_ecl * earth_rad)
+
+        jer_to_sun = p_sun - p_jer
+        jer_to_moon = p_moon - p_jer
+
+        angle = np.arccos(float(np.dot(jer_to_sun, jer_to_moon) / (length(jer_to_sun) * length(jer_to_moon))))
+        print(MJD, angle)
+
+        MJD += (1/steps_per_day)
 
 
 def natural_sort_key(s, _nsre=re.compile('([0-9]+)')):
@@ -1285,16 +1312,11 @@ def rotated_moon_axes(mjd_cur, eps=moon_obliquity):
     return np.array([es_x, es_y, es_z])
 
 
-def draw_moon2(MJD, cam_axes, p_jer_ecl, positionsArr, image_num):
-
-    N = 500
-    # D_fov = 0.015  # field of view, in radians
-    D_fov = 0.3  # field of view, in radians
-    canvas_size = (2*N) + 1
-    imageData = np.zeros((canvas_size, canvas_size, 3), dtype=np.uint8)
+def draw_moon2(MJD, cam_axes, p_jer_ecl, positionsArr, imageData, N, D_fov, trail, image_num):
 
     moonColorIm = Image.open('lroc_color_poles_2k.tif')
     im_array = np.asarray(moonColorIm)
+    trail_marked = False
 
     # moon axes rotated around the current phase angle
     es_x, es_y, es_z = rotated_moon_axes(MJD)
@@ -1355,7 +1377,11 @@ def draw_moon2(MJD, cam_axes, p_jer_ecl, positionsArr, image_num):
                     else:
                         imageData[N-j, i+N] = color
 
-                elif s2.dot(p_s2 - p_jer_solsys) < 0 and np.dot(n_pix, normalize(p_jer_ecl)) > 0:
+                    if not trail_marked:
+                        trail.append((N - j, i + N))
+                        trail_marked = True
+
+                elif s2.dot(p_s2 - p_jer_solsys) < 0:# and np.dot(n_pix, normalize(p_jer_ecl)) > 0:
                     x2 = (2048 * ((phi2 + 2*np.pi) / (2 * np.pi))) % 2048
                     y2 = 1024 * (theta2 / np.pi)
 
@@ -1367,18 +1393,24 @@ def draw_moon2(MJD, cam_axes, p_jer_ecl, positionsArr, image_num):
                     else:
                         imageData[N-j, i+N] = color
 
-            else:
-                # if this point on the sky is visible
-                if np.dot(n_pix, normalize(p_jer_ecl)) > 0:
-                    imageData[N - j, i + N] = [0, 0, 100]
+                    if not trail_marked:
+                        trail.append((N - j, i + N))
+                        trail_marked = True
+            #
+            # else:
+            #     # if this point on the sky is visible
+            #     if np.dot(n_pix, normalize(p_jer_ecl)) > 0:
+            #         imageData[N - j, i + N] = [0, 0, 100]
 
+    for i in range(len(trail)):
+        imageData[trail[i]] = [255, 255, 255]
 
     image = Image.fromarray(imageData)
-    file_name = "./MoonImages/" + str(image_num) + ".png"
+    file_name = "./SkyImages/" + str(image_num) + ".png"
     image.save(file_name)
     # image.show()
 
-    return imageData
+    return trail
 
 def draw_sun(MJD, cam_axes, p_jer_ecl, imageData, positionsArr):
     n_cam = np.cross(cam_axes[1], cam_axes[0])
@@ -1421,13 +1453,11 @@ def draw_sun(MJD, cam_axes, p_jer_ecl, imageData, positionsArr):
     # return image
 
 
-def draw_sun2(MJD, cam_axes, p_jer_ecl, positionsArr, image_num, imageData):
+def draw_sun2(MJD, cam_axes, p_jer_ecl, positionsArr, N, D_fov, trail, image_num):
 
-    N = 500
-    # D_fov = 0.015  # field of view, in radians
-    D_fov = 0.3  # field of view, in radians
-    canvas_size = (2*N) + 1
-    # imageData = np.zeros((canvas_size, canvas_size, 3), dtype=np.uint8)
+    canvas_size = (2 * N) + 1
+    imageData = np.zeros((canvas_size, canvas_size, 3), dtype=np.uint8)
+    trail_marked = False
 
     e_R, e_U, n_cam = cam_axes
     p_earth = get_pos(MJD, 'e', positionsArr)
@@ -1464,18 +1494,21 @@ def draw_sun2(MJD, cam_axes, p_jer_ecl, positionsArr, image_num, imageData):
                 s2 = p_s2 - p_sun
 
                 # plot if this either point on the sun is visible to the observer
-                if s1.dot(p_s1 - p_jer_solsys) < 0 or (s2.dot(p_s2 - p_jer_solsys) < 0 and np.dot(n_pix, normalize(p_jer_ecl)) > 0):
+                if (s1.dot(p_s1 - p_jer_solsys) < 0 or s2.dot(p_s2 - p_jer_solsys)) < 0: # and np.dot(n_pix, normalize(p_jer_ecl)) > 0:
                     imageData[N - j, i + N] = [255, 255, 255]
-            #
-            # else:
-            #     # if this point on the sky is visible
-            #     if np.dot(n_pix, normalize(p_jer_ecl)) > 0:
-            #         imageData[N - j, i + N] = [0, 0, 100]
+                    if not trail_marked:
+                        trail.append((N - j, i + N))
+                        trail_marked = True
 
-    image = Image.fromarray(imageData)
-    file_name = "./SunImages/" + str(image_num) + ".png"
-    image.save(file_name)
-    # image.show()
+            else:
+                # if this point on the sky is visible
+                if np.dot(n_pix, normalize(p_jer_ecl)) > 0:
+                    imageData[N - j, i + N] = [0, 0, 100]
+
+    for i in range(len(trail)):
+        imageData[trail[i]] = [255, 255, 255]
+
+    return imageData, trail
 
 
 # returns array consisting of the angles between the sun, earth, and moon
@@ -1602,6 +1635,210 @@ def moon_period(t, expected_angles, actual_angles):
     return np.mean(month_lens)
 
 
+# given a mjd, return angular distance between sun and moon at that time
+def cur_sun_moon_dist(mjd_cur, positionsArr):
+    p_sun = get_pos(mjd_cur, 's', positionsArr)
+    p_moon = get_pos(mjd_cur, 'm', positionsArr)
+    p_earth = get_pos(mjd_cur, 'e', positionsArr)
+
+    earth_to_sun = p_sun - p_earth
+    earth_to_moon = p_moon - p_earth
+
+    return angular_dist(earth_to_sun, earth_to_moon)
+
+
+# returns the mjd of the molad of Tishrei for the given Hebrew year
+def molad_date(year):
+
+    # determine molad of first month of given year
+    molad = molad_determination(1, year, acc_days=True)
+    days, hours, chalakim = molad
+    hours += chalakim / 1080
+    days += hours / 24
+
+    # calculate the day number (since creation) of the mjd epoch and subtract it from the molad day to get its mjd...
+    mjd_epoch_day_num = 2052004.25 + (2 / 24)
+    mjd_molad = days - mjd_epoch_day_num
+
+    return mjd_molad
+
+
+def molad_snapshots(start_yr, total_yrs, draw=True, plot=False):
+
+    day_of_week, greg_day, greg_month, greg_year = hebrew_to_greg(1, 1, start_yr)
+
+    # build up positionsArr to contain necessary years
+    positionsArr = []
+    for yr in range(greg_year-1, greg_year + total_yrs):
+        positionsArr += get_positions(yr)[:-1]
+    positionsArr += get_positions(greg_year + total_yrs)
+
+    # mjd of molad Tishrei of start year
+    mjd_molad = molad_date(start_yr)
+
+    molad_mjds = []
+    angular_dists = []
+
+    sun_x_list = []
+    sun_y_list = []
+    moon_x_list = []
+    moon_y_list = []
+
+    for month in range(total_yrs * 12):
+        print(month)
+
+        # set up
+        n_jer_ecl, n_jer_equ, n_sun_jer_ecl, n_sun_jer_equ = zenithAndSunVectors(mjd_molad, phi_ny, theta_ny, positionsArr)
+        obs_axes = observer_axes(n_jer_equ)
+        cam_axes = camera_axes(mjd_molad, n_jer_ecl * earth_rad, positionsArr, obs_axes)
+
+        if draw:
+            # draw the sun and moon at this month's molad
+            N = 50
+            D_fov = 0.05  # field of view, in radians
+            imageData = draw_sun2(mjd_molad, cam_axes, n_jer_ecl * earth_rad, positionsArr, N, D_fov, month)
+            draw_moon2(mjd_molad, cam_axes, n_jer_ecl * earth_rad, positionsArr, imageData, N, D_fov, month)
+
+        if plot:
+            n_cam = cam_axes[2]
+            p_moon = get_pos(mjd_molad, 'm', positionsArr)
+            p_earth = get_pos(mjd_molad, 'e', positionsArr)
+            p_sun = get_pos(mjd_molad, 's', positionsArr)
+            p_moon_earth_ecl = p_moon - p_earth
+            n_moon_jer_ecl = n_body_jer(n_jer_ecl, p_moon_earth_ecl)
+
+            # sun and moon vectors in camera coords
+            sun_x, sun_y = n_camera_coords(n_sun_jer_ecl, cam_axes)
+            moon_x, moon_y = n_camera_coords(n_moon_jer_ecl, cam_axes)
+            sun_x_list.append(sun_x)
+            sun_y_list.append(sun_y)
+            moon_x_list.append(moon_x)
+            moon_y_list.append(moon_y)
+
+        else:
+            # or, determine the angle between the sun and moon
+            dist = cur_sun_moon_dist(mjd_molad, positionsArr)
+            print(mjd_molad, dist)
+
+            molad_mjds.append(mjd_molad)
+            angular_dists.append(dist)
+
+
+        ## the following plots (doesn't draw) the sun and moon on background ra-dec lines (zoomed-out image)
+        # f = plt.figure()
+        # plt.gca().set_aspect('equal', adjustable='box')
+        #
+        # RA_Dec_lines(cam_axes, n_jer_equ * earth_rad, imageData)
+        # plot_sun_moon(mjd_molad, cam_axes, n_jer_ecl, n_sun_jer_ecl, positionsArr)
+        #
+        # plt.title("MJD:" + str(mjd_molad))
+        # plt.xlabel("Right", fontfamily="times new roman")
+        # plt.ylabel("Up", fontfamily="times new roman")
+        #
+        # # plt.show()
+        # f.savefig("./MoladSnapshotsRef/" + str(month))
+        # plt.close(f)
+
+        # move to next molad
+        mjd_molad += avg_month_len
+
+    plt.scatter(sun_x_list, sun_y_list, color='yellow')
+    plt.scatter(moon_x_list, moon_y_list, color='grey')
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.show()
+
+
+# given a start time, return hourly list of times and corresponding list of sun-moon angular dists
+def sun_moon_dist(greg_year, start_mjd, total_days, steps_per_day):
+
+    # build up positionsArr to contain necessary years
+    positionsArr = get_positions(greg_year)[:-1] + get_positions(greg_year+1)
+    mjd_list = []
+    dist_list = []
+
+    mjd_cur = start_mjd
+    for hour in range(total_days * steps_per_day):
+
+        # determine the angular distance between the sun and moon
+        # vectors relative to the center of the solar system:
+        dist = cur_sun_moon_dist(mjd_cur, positionsArr)
+
+        mjd_list.append(mjd_cur)
+        dist_list.append(dist)
+
+        # adjust mjd
+        mjd_cur += 1/24
+
+    return mjd_list, dist_list
+
+
+# expects ~3-day long list of times (hourly) as well as corresponding ang_dist list
+def act_conjunction(days, ang_dist):
+    index = 1
+    mjd_cur = days[index]
+
+    while mjd_cur < days[-1]:
+        x_list = days[index-1:index+2]
+        y_list = ang_dist[index-1:index+2]
+
+        # fit order 2 polynomial to the three time-dist points for the prev, cur, and following hours
+        p_X = interpolation(x_list, y_list, 2)
+        conjunction_time = critical_point(p_X, mjd_cur, interval=1/24)
+
+        # if we found a minimum sometime within this hour
+        if conjunction_time: return float(conjunction_time)
+
+        mjd_cur += 1 / 24
+        index += 1
+
+    print("couldn't find conjunction time near", mjd_cur)
+    return -1
+
+
+# for each month, get expected molad, call actual conjunction time function, subtract and plot the dif
+# given Hebrew start year, run for total_yrs, each month determining
+def plot_avg_molad_dif(start_yr, total_yrs):
+    x = []
+    diffs = []
+    day_of_week, greg_day, greg_month, greg_year = hebrew_to_greg(1, 1, start_yr)
+
+    mjd_greg_newyear = mjd(1, 1, greg_year-1, (0, 0))
+
+    # mjd of molad Tishrei of given Hebrew year
+    mjd_avg_molad = molad_date(start_yr)
+
+    # mjd of actual molad
+    mjd_list, dist_list = sun_moon_dist(greg_year-1, mjd_avg_molad-3, 6, 24)
+    mjd_act_molad = act_conjunction(mjd_list, dist_list)
+
+    # for each Hebrew month, add average month len to get average molad
+    # and then get actual molad time and plot dif
+    for month in range(total_yrs*12):
+        print(month)
+        if mjd_act_molad != -1:
+            x.append(month)
+            diffs.append(mjd_avg_molad-mjd_act_molad)
+
+        # move to next month
+        mjd_avg_molad += avg_month_len
+
+        # check if we're up to the next greg year
+        if isLeap(greg_year): yr_len = 366
+        else:                 yr_len = 365
+        if mjd_avg_molad - mjd_greg_newyear > yr_len:
+            greg_year += 1
+            mjd_greg_newyear += yr_len
+
+        mjd_list, dist_list = sun_moon_dist(greg_year-1, mjd_avg_molad - 3, 6, 24)
+        mjd_act_molad = act_conjunction(mjd_list, dist_list)
+
+    plt.scatter(x, diffs)
+    plt.xlabel('month number')
+    plt.ylabel('average molad - actual molad (days)')
+    plt.show()
+
+
 def main():
     # day = 13
     # month = 9
@@ -1613,10 +1850,12 @@ def main():
     day = int(input("Day: "))
     hour = int(input("Hour (0-23): "))
     minutes = float(input("Minutes: "))
-    location = input("Location ('ny' or 'jer'): ")
+    location = input("Location ('ny', 'jer', 'texas'): ")
 
     if location == "ny":    time_zone = 'EST'
     elif location == "jer": time_zone = 'IST'
+    elif location == "texas": time_zone = 'CST'
+
     else:
         print("invalid location")
         return
@@ -1635,13 +1874,25 @@ def main():
 
     phi_dif, theta = phiDifAndTheta(time_zone)
     # moving_RA_Dec(MJD, phi_dif, theta, positionsArr, 30, 1)
-    moving_RA_Dec(MJD, phi_dif, theta, positionsArr, 1/24, 20*24)
-    movie("Plots", "Ra_Dec")
-    movie("SunImages", "SunMoonMovie3")
+    moving_RA_Dec(MJD, phi_dif, theta, positionsArr, 2/24, 20*24)
 
-main()
+    # movie("Plots", "Ra_Dec2")
+    # movie("SunImages", "SunMoonMovie5")
+    # movie("SkyImages 3.10.24", "SummerSolsticeMovie")
+    # movie("SkyImages 6.6.24", "SpringEquinoxMovie")
 
 
+# main()
+movie("SkyImages 3.10.24", "SummerSolsticeMovie")
+movie("SkyImages 6.6.24", "SpringEquinoxMovie")
 
 # test_positions(2023)
+
+# molad_snapshots(5764, 40, draw=False, plot=True)
+
+# mjds, angular_dists = sun_moon_dist(2024, 60407, 5, 24)
+# print(act_conjunction(mjds, angular_dists))
+
+# plot_avg_molad_dif(5765, 9)
+
 
