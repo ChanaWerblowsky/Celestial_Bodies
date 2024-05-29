@@ -4,7 +4,6 @@
 
 # Returns length of given gregorian month
 def month_len(month, leap):
-    # index of list is month number-1
     month_lengths = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
     if month == 2 and leap:
@@ -24,6 +23,7 @@ def mjd(dd, mm, yy, tt):
     epoch = (17, 11, 1858, (0, 0))  # 17 November, 1858, 12 am (midnight)
 
     days = 0  # days since epoch
+    start = end = 0
 
     if (dd, mm, yy, tt) == epoch:
         return days  # 0
