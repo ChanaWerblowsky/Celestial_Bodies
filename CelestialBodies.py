@@ -978,7 +978,7 @@ def drawHorizon(cam_axes, n_jer_equ):
         plt.plot([points[i][0], points[i+1][0]], [points[i][1], points[i+1][1]], 'b-', markersize=1)
 
 
-def RA_Dec_lines(cam_axes, p_jer_equ, imageData):
+def RA_Dec_lines(cam_axes, p_jer_equ):
 
     # xMin = yMin = -0.999
     # xMax = yMax = 0.999
@@ -1052,7 +1052,6 @@ def RA_Dec_lines(cam_axes, p_jer_equ, imageData):
                 plt.plot([points[j][0], points[j + 1][0]], [points[j][1], points[j + 1][1]], 'k-')
 
     # plt.show()
-    return imageData
 
 
 def sky_snapshots(mjd_cur, phi_dif, theta, positionsArr, total_days, steps_per_day):
@@ -1076,13 +1075,11 @@ def sky_snapshots(mjd_cur, phi_dif, theta, positionsArr, total_days, steps_per_d
 
         ############
         # now we can plot RA and Dec lines and sun/moon
-        imageData = np.zeros((canvas_size, canvas_size, 3), dtype=np.uint8)
-
         f = plt.figure()
         plt.gca().set_aspect('equal', adjustable='box')
 
         sun_coords, moon_coords = plot_sun_moon(mjd_cur, cam_axes, n_jer_ecl, n_sun_jer_ecl, positionsArr)
-        imageData = RA_Dec_lines(cam_axes, n_jer_equ * earth_rad, imageData)
+        RA_Dec_lines(cam_axes, n_jer_equ * earth_rad)
 
         plt.title("MJD:" + str(mjd_cur))
         plt.xlabel("Right", fontfamily="times new roman")
@@ -1256,7 +1253,7 @@ def rotated_moon_axes(mjd_cur, eps=moon_obliquity):
     return np.array([es_x, es_y, es_z])
 
 
-# new draw_moon function, looping through points in the sky and checking if the moon is there
+# new draw_moon function, looping through each pixel in the sky and checking if it contains the moon
 def draw_moon2(mjd_cur, cam_axes, p_jer_ecl, positionsArr, imageData, N, D_fov, trail, image_num):
 
     moonColorIm = Image.open('lroc_color_poles_2k.tif')
@@ -1395,7 +1392,7 @@ def draw_sun(mjd_cur, cam_axes, p_jer_ecl, imageData, positionsArr):
     # return image
 
 
-# new draw_sun function, looping through points in the sky and checking if the sun is there
+# new draw_sun function, looping through each pixel in the sky and checking if it contains the sun
 def draw_sun2(mjd_cur, cam_axes, p_jer_ecl, positionsArr, N, D_fov, trail, image_num):
 
     canvas_size = (2 * N) + 1
