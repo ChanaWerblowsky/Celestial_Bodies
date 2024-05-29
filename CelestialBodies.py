@@ -1097,7 +1097,11 @@ def sky_snapshots(mjd_cur, phi_dif, theta, positionsArr, total_days, steps_per_d
         # imageData = draw_sun(mjd_cur, cam_axes, n_jer_ecl*earth_rad, imageData, positionsArr)
         # draw_moon(mjd_cur, cam_axes, n_jer_ecl*earth_rad, moon_coords, imageData, positionsArr)
         imageData, sun_trail = draw_sun2(mjd_cur, cam_axes, n_jer_ecl * earth_rad, positionsArr, N, D_fov, sun_trail, i)
-        moon_trail = draw_moon2(mjd_cur, cam_axes, n_jer_ecl * earth_rad, positionsArr, imageData, N, D_fov, moon_trail, i)
+        imageData, moon_trail = draw_moon2(mjd_cur, cam_axes, n_jer_ecl * earth_rad, positionsArr, imageData, N, D_fov, moon_trail, i)
+
+        image = Image.fromarray(imageData)
+        file_name = "./SkyImages/" + str(i) + ".png"
+        image.save(file_name)
         #############
 
         mjd_cur += (1/steps_per_day)
@@ -1346,11 +1350,7 @@ def draw_moon2(mjd_cur, cam_axes, p_jer_ecl, positionsArr, imageData, N, D_fov, 
     for i in range(len(trail)):
         imageData[trail[i]] = [255, 255, 255]
 
-    image = Image.fromarray(imageData)
-    file_name = "./SkyImages/" + str(image_num) + ".png"
-    image.save(file_name)
-
-    return trail
+    return imageData, trail
 
 
 # original draw_sun function, looping over points on the sun and projecting each onto the canvas
