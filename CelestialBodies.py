@@ -1056,7 +1056,7 @@ def RA_Dec_lines(cam_axes, p_jer_equ):
 
 def sky_snapshots(mjd_cur, phi_dif, theta, positionsArr, total_days, steps_per_day):
 
-    N = 50
+    N = 100
     # D_fov = 0.05  # field of view, in radians
     D_fov = 0.1  # field of view, in radians
     sun_trail = []
@@ -1307,23 +1307,34 @@ def draw_moon2(mjd_cur, cam_axes, p_jer_ecl, positionsArr, imageData, N, D_fov, 
                 r2, phi2, theta2 = cartesian_to_spherical(s2_rotated)
 
                 # plot the point that's visible to the observer
-                if s1.dot(p_s1 - p_jer_solsys) < 0:
-                    # map this (phi, theta) point onto the 2D moon-color image
-                    x1 = (2048 * ((phi1 + 2*np.pi) / (2*np.pi))) % 2048
-                    y1 = 1024 * (theta1 / np.pi)
-                    color = im_array[int(y1)][int(x1)]
 
-                    # illuminated?
-                    if s1.dot(p_s1 - p_sun) >= 0:
-                        imageData[N-j, i+N] = color / 4
-                    else:
-                        imageData[N-j, i+N] = color
+                ## the following block never runs
+                # if s1.dot(p_s1 - p_jer_solsys) < 0:
+                #     # map this (phi, theta) point onto the 2D moon-color image
+                #     x1 = (2048 * ((phi1 + 2*np.pi) / (2*np.pi))) % 2048
+                #     y1 = 1024 * (theta1 / np.pi)
+                #     color = im_array[int(y1)][int(x1)]
+                #
+                #     # illuminated?
+                #     if s1.dot(p_s1 - p_sun) >= 0:
+                #         imageData[N-j, i+N] = color / 4
+                #     else:
+                #         imageData[N-j, i+N] = color
+                #
+                #     # check if this is the center point - and if so, mark it
+                #     if not trail_marked:
+                #         c = x_p ** 2 + x_c ** 2 - (2 * x_p * x_c) + y_p ** 2 + y_c ** 2 - \
+                #             (2 * y_p * y_c) + z_p ** 2 + z_c ** 2 - (2 * z_p * z_c) - (moon_rad/8)**2
+                #         discrim = b ** 2 - (4 * a * c)
+                #         if discrim >= 0:
+                #             trail.append((N - j, i + N))
+                #             trail.append((N - j + 1, i + N - 1))
+                #             trail.append((N - j - 1, i + N + 1))
+                #             # trail.append((N - j + 1, i + N + 1))
+                #             # trail.append((N - j - 1, i + N - 1))
+                #             trail_marked = True
 
-                    if not trail_marked:
-                        trail.append((N - j, i + N))
-                        trail_marked = True
-
-                elif s2.dot(p_s2 - p_jer_solsys) < 0:# and np.dot(n_pix, normalize(p_jer_ecl)) > 0:
+                if s2.dot(p_s2 - p_jer_solsys) < 0:# and np.dot(n_pix, normalize(p_jer_ecl)) > 0:
                     x2 = (2048 * ((phi2 + 2*np.pi) / (2 * np.pi))) % 2048
                     y2 = 1024 * (theta2 / np.pi)
 
@@ -1335,9 +1346,19 @@ def draw_moon2(mjd_cur, cam_axes, p_jer_ecl, positionsArr, imageData, N, D_fov, 
                     else:
                         imageData[N-j, i+N] = color
 
+                    # check if this is the center point - and if so, mark it
                     if not trail_marked:
-                        trail.append((N - j, i + N))
-                        trail_marked = True
+                        c = x_p ** 2 + x_c ** 2 - (2 * x_p * x_c) + y_p ** 2 + y_c ** 2 - \
+                            (2 * y_p * y_c) + z_p ** 2 + z_c ** 2 - (2 * z_p * z_c) - (moon_rad/10)**2
+                        discrim = b ** 2 - (4 * a * c)
+                        if discrim >= 0:
+                            trail.append((N - j, i + N))
+                            # trail.append((N - j + 1, i + N - 1))
+                            # trail.append((N - j - 1, i + N + 1))
+                            trail.append((N - j + 1, i + N + 1))
+                            trail.append((N - j - 1, i + N - 1))
+                            trail_marked = True
+
             #
             # else:
             #     # if this point on the sky is visible
@@ -1345,7 +1366,7 @@ def draw_moon2(mjd_cur, cam_axes, p_jer_ecl, positionsArr, imageData, N, D_fov, 
             #         imageData[N - j, i + N] = [0, 0, 100]
 
     for i in range(len(trail)):
-        imageData[trail[i]] = [255, 255, 255]
+        imageData[trail[i]] = [0, 0, 0]
 
     return imageData, trail
 
@@ -1436,9 +1457,27 @@ def draw_sun2(mjd_cur, cam_axes, p_jer_ecl, positionsArr, N, D_fov, trail, image
                 # plot if this either point on the sun is visible to the observer
                 if (s1.dot(p_s1 - p_jer_solsys) < 0 or s2.dot(p_s2 - p_jer_solsys)) < 0: # and np.dot(n_pix, normalize(p_jer_ecl)) > 0:
                     imageData[N - j, i + N] = [255, 255, 255]
+
+                    # check if this is the center point - and if so, mark it
                     if not trail_marked:
-                        trail.append((N - j, i + N))
-                        trail_marked = True
+
+                        # lambda_x = (x_c-x_p) / n_x
+                        # lambda_y = (y_c-y_p) / n_y
+                        # lambda_z = (z_c-z_p) / n_z
+                        # if lambda_x == lambda_y and lambda_x == lambda_z:
+                        #     trail.append((N - j, i + N))
+                        #     trail_marked = True
+
+                        c = x_p ** 2 + x_c ** 2 - (2 * x_p * x_c) + y_p ** 2 + y_c ** 2 - \
+                            (2 * y_p * y_c) + z_p ** 2 + z_c ** 2 - (2 * z_p * z_c) - (sun_rad/10)**2
+                        discrim = b ** 2 - (4 * a * c)
+                        if discrim >= 0:
+                            trail.append((N - j, i + N))
+                            # trail.append((N - j + 2, i + N - 2))
+                            # trail.append((N - j - 2, i + N + 2))
+                            trail.append((N - j + 1, i + N + 1))
+                            trail.append((N - j - 1, i + N - 1))
+                            trail_marked = True
 
             else:
                 # if this point on the sky is visible
@@ -1777,6 +1816,13 @@ def plot_avg_molad_dif(start_yr, total_yrs):
     plt.xlabel('month number')
     plt.ylabel('average molad - actual molad (days)')
     plt.show()
+
+
+# def equinox_time():
+#     # for each hour of the equinox day:
+#     ## get sun-earth vector and north pole vector and find angle between them
+#     ## interpolate using every 3 consecutive hours and corresponding angles determine when angle == 90 degrees
+
 
 
 def main():
