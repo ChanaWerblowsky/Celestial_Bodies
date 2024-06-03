@@ -1099,6 +1099,12 @@ def sky_snapshots(mjd_cur, phi_dif, theta, positionsArr, total_days, steps_per_d
         image = Image.fromarray(imageData)
         file_name = "./SkyImages/" + str(i) + ".png"
         image.save(file_name)
+
+        # now add trails
+        for j in range(len(sun_trail)):
+            imageData[sun_trail[j]] = [255, 255, 255]
+        for j in range(len(moon_trail)):
+            imageData[moon_trail[j]] = [255, 255, 255]
         #############
 
         mjd_cur += (1/steps_per_day)
@@ -1365,8 +1371,11 @@ def draw_moon2(mjd_cur, cam_axes, p_jer_ecl, positionsArr, imageData, N, D_fov, 
             #     if np.dot(n_pix, normalize(p_jer_ecl)) > 0:
             #         imageData[N - j, i + N] = [0, 0, 100]
 
-    for i in range(len(trail)):
-        imageData[trail[i]] = [0, 0, 0]
+    # mark trail from previous snapshots
+    if trail_marked: items_to_exclude = 3
+    else:            items_to_exclude = 0
+    for i in range(len(trail) - items_to_exclude):
+        imageData[trail[i]] = [255, 255, 255]
 
     return imageData, trail
 
@@ -1484,7 +1493,10 @@ def draw_sun2(mjd_cur, cam_axes, p_jer_ecl, positionsArr, N, D_fov, trail, image
                 if np.dot(n_pix, normalize(p_jer_ecl)) > 0:
                     imageData[N - j, i + N] = [0, 0, 100]
 
-    for i in range(len(trail)):
+    # mark trail from previous snapshots
+    if trail_marked: items_to_exclude = 3
+    else:            items_to_exclude = 0
+    for i in range(len(trail) - items_to_exclude):
         imageData[trail[i]] = [255, 255, 255]
 
     return imageData, trail
@@ -1776,7 +1788,6 @@ def act_conjunction(days, ang_dist):
 
 
 # for each month, get expected molad, call actual conjunction time function, subtract and plot the dif
-# given Hebrew start year, run for total_yrs, each month determining
 def plot_avg_molad_dif(start_yr, total_yrs):
     x = []
     diffs = []
@@ -1818,10 +1829,33 @@ def plot_avg_molad_dif(start_yr, total_yrs):
     plt.show()
 
 
-# def equinox_time():
-#     # for each hour of the equinox day:
-#     ## get sun-earth vector and north pole vector and find angle between them
-#     ## interpolate using every 3 consecutive hours and corresponding angles determine when angle == 90 degrees
+def ecliptic_equator_angles(mjd_cur, total_days, time_step, positionsArr):
+    nt = np.arange(0, total_days/time_step, time_step)
+    angles = []
+
+    # North Pole unit vector
+    n_np = equatorial_to_ecliptic([0, 0, 1])
+
+    # for each hour of the equinox day:
+    for i in range(len(nt)):
+        p_sun = get_pos(mjd_cur, 's', positionsArr)
+        p_earth = get_pos(mjd_cur, 'e', positionsArr)
+        p_sun_earth = p_sun - p_earth
+
+        angle = angular_dist(n_np, p_sun_earth)
+        angles.append(angle)
+
+        mjd_cur += time_step
+
+    return nt, angles
+
+    ## get sun-earth vector and north pole vector and find angle between them
+    ## interpolate using every 3 consecutive hours and corresponding angles determine when angle == 90 degrees
+
+
+# see act_conjunction_time() function
+def get_equinox_time(nt, angles):
+    pass
 
 
 
