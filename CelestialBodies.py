@@ -3,10 +3,12 @@ import numpy as np
 from sympy import *
 from sympy import symbols, linsolve, solveset
 import matplotlib.pyplot as plt
+import pandas as pd
 import cv2
 import glob
 import re
 import os
+from queue import Queue
 from DateConversion import year_lists, molad_determination, \
     time_addition, time_multiplication, LEAP_YEARS, greg_to_hebrew, hebrew_to_greg, len_hebrew_month
 from SunEarthMoonPosition import get_positions
@@ -93,6 +95,7 @@ def interpolation(xList, yList, order=2):
     X, Y = symbols('X Y')
 
     # get the one tuple in coefficient FiniteSet (the polynomial)
+    polynomial = 0
     for tup in coeff:
         polynomial = (tup[0] * X ** 2) + (tup[1] * X) + tup[2]  # - sunset_angle
 
@@ -1829,34 +1832,146 @@ def plot_avg_molad_dif(start_yr, total_yrs):
     plt.show()
 
 
-def ecliptic_equator_angles(mjd_cur, total_days, time_step, positionsArr):
-    nt = np.arange(0, total_days/time_step, time_step)
+def ecliptic_np_angles(mjd_cur, total_days, time_step, positionsArr):
+
+    times = []  # mjd
     angles = []
 
     # North Pole unit vector
     n_np = equatorial_to_ecliptic([0, 0, 1])
 
-    # for each hour of the equinox day:
-    for i in range(len(nt)):
+    num_iterations = int(total_days/time_step)
+
+    # for each hour, get angle between sun-earth vector and North Pole vector
+    for i in range(num_iterations):
         p_sun = get_pos(mjd_cur, 's', positionsArr)
         p_earth = get_pos(mjd_cur, 'e', positionsArr)
-        p_sun_earth = p_sun - p_earth
+        p_earth_sun = p_sun - p_earth
 
-        angle = angular_dist(n_np, p_sun_earth)
+        angle = angular_dist(n_np, p_earth_sun)
+        times.append(mjd_cur)
         angles.append(angle)
-
+        print(mjd_cur, angle-(np.pi/2))
         mjd_cur += time_step
 
-    return nt, angles
-
-    ## get sun-earth vector and north pole vector and find angle between them
-    ## interpolate using every 3 consecutive hours and corresponding angles determine when angle == 90 degrees
+    return times, angles
 
 
-# see act_conjunction_time() function
-def get_equinox_time(nt, angles):
-    pass
+# interpolate using every 3 consecutive hours and corresponding angles determine when angle == 90 degrees
+def get_equinox_time(mjd_cur, total_days, time_step, positionsArr):
+    times, angles = ecliptic_np_angles(mjd_cur, total_days, time_step, positionsArr)
 
+    index = 1
+    mjd_cur = times[index]
+
+    while mjd_cur < times[-1]:
+        x_list = times[index - 1:index + 2]
+        y_list = angles[index - 1:index + 2]
+
+        # fit order 2 polynomial to the three time-dist points for the prev, cur, and following hours
+        p_X = interpolation(x_list, y_list, 2) - (np.pi/2)
+
+        X = symbols('X')
+        roots = solveset(p_X, X)
+        for r in roots:
+            if r.is_real and mjd_cur <= r <= mjd_cur + 1/24:  # if the time falls within the given hour
+                return r
+
+        index += 1
+        mjd_cur = times[index]
+
+    print("couldn't find equinox time near", mjd_cur)
+    return -1
+
+
+def get_solstice_time(mjd_cur, total_days, time_step, positionsArr):
+    times, angles = ecliptic_np_angles(mjd_cur, total_days, time_step, positionsArr)
+
+    index = 1
+    mjd_cur = times[index]
+
+    while mjd_cur < times[-1]:
+        x_list = times[index - 1:index + 2]
+        y_list = angles[index - 1:index + 2]
+
+        # fit order 2 polynomial to the three time-dist points for the prev, cur, and following hours
+        p_X = interpolation(x_list, y_list, 2)
+        solstice_time = critical_point(p_X, mjd_cur, interval=1/24)
+
+        # if we found a min or max sometime within this hour
+        if solstice_time: return float(solstice_time)
+
+        index += 1
+        mjd_cur = times[index]
+
+    print("couldn't find solstice time near", mjd_cur)
+    return -1
+
+
+# get position of sun at moment of equinox/solstice
+def sun_pos_at_tekufah(mjd_cur, positionsArr, tekufah_type):
+
+    # positionsArr = get_positions(2000)
+    # mjd_cur = mjd(20, 3, 2000, (0, 0))
+
+    if tekufah_type == 'equinox': tekufah_mjd = get_equinox_time(mjd_cur, 1, 1/24, positionsArr)
+    else:                         tekufah_mjd = get_solstice_time(mjd_cur, 1, 1/24, positionsArr)
+
+    p_sun = get_pos(tekufah_mjd, 's', positionsArr)
+    p_earth = get_pos(tekufah_mjd, 'e', positionsArr)
+    p_earth_sun = p_sun - p_earth
+    sun_location = np.arctan2(float(p_earth_sun[1]), float(p_earth_sun[0]))
+
+    return sun_location
+
+
+def season_times(start_tekufah, start_yr, end_yr):
+
+    # build up positionsArr for the requisite number of years
+    positionsArr = get_positions(start_yr)
+    for i in range(end_yr - start_yr):
+        positionsArr += get_positions(i)[1:]
+
+    df = pd.DataFrame(columns=['date', 'mjd', 'days since prev equinox/solstice', 'days since this equinox/solstice last year'])
+
+    d, m, y = start_tekufah
+    mjd_cur = mjd(d, m, y, (0, 0))
+    end_mjd = mjd(0, 0, end_yr, (0, 0)) + 365
+
+    prev_season_mjd = 0
+    prev_seasons_q = Queue(maxsize=4)
+    this_season_last_yr_mjd = None
+
+    prev = 'S'
+    i = 0
+    while mjd_cur <= end_mjd:
+        # are we up to an equinox or solstice?
+        if prev == 'S':
+            tekufah_mjd = get_equinox_time(mjd_cur, 7, 1/24, positionsArr)
+            prev = 'E'
+        else:
+            tekufah_mjd = get_solstice_time(mjd_cur, 7, 1/24, positionsArr)
+            prev = 'S'
+
+        # if queue is full, we can get the mjd of this equinox/solstice last year
+        if prev_seasons_q.full():
+            this_season_last_yr_mjd = prev_seasons_q.get()
+
+        time_since_prev = tekufah_mjd - prev_season_mjd
+        time_since_prev_cur_season = tekufah_mjd - this_season_last_yr_mjd if this_season_last_yr_mjd else None
+
+        # need function to convert mjd into dd-mm-yyyy and hh:mm:ss
+        date = 'March 21, 2002, 15:48'
+
+        # add entry to dataframe for this equinox/solstice and corresponding info
+        df = pd.concat([pd.DataFrame([[date, tekufah_mjd, time_since_prev, time_since_prev_cur_season]], columns=df.columns), df], ignore_index=True)
+
+        # note this mjd
+        prev_seasons_q.put(tekufah_mjd)
+        prev_season_mjd = tekufah_mjd
+
+        i += 1
+        mjd_cur = tekufah_mjd + 88
 
 
 def main():
@@ -1890,12 +2005,11 @@ def main():
 
     phi_dif, theta = phiDifAndTheta(time_zone)
     sky_snapshots(mjd_cur, phi_dif, theta, positionsArr, 2/24, 20*24)
-
     # movie("SkyImages 3.10.24", "SummerSolsticeMovie")
     # movie("SkyImages 6.6.24", "SpringEquinoxMovie")
 
 
-main()
+# main()
 
 
 # test_positions(2023)
@@ -1907,4 +2021,5 @@ main()
 
 # plot_avg_molad_dif(5765, 9)
 
-
+start_tekufah = (20, 3, 2000)
+season_times(start_tekufah, start_yr=2000, end_yr=2020)
