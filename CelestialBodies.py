@@ -4,6 +4,7 @@ from sympy import *
 from sympy import symbols, linsolve, solveset
 import matplotlib.pyplot as plt
 import pandas as pd
+from tabulate import tabulate
 import cv2
 import glob
 import re
@@ -26,6 +27,7 @@ celestial_rad = au_cm   # 1 AU, in cm
 degrees_day = 360.98561     # degrees that Earth rotates in a day
 equinox_time = (15, 33)     # GMT
 mjd_equinox = 59658.64791666667
+mjd_j2000 = 51544
 phi_jer = 35.214        # degrees
 phi_ny = -74.006        # degrees
 phi_texas = -97.7431
@@ -36,10 +38,11 @@ theta_ny = 49.3         # degrees
 dayNum_mjdEpoch = 2052005
 sunset_angle = 90.8     # degrees
 obliquity = 23.43       # degrees
-moon_obliquity = 1.5424  # degrees
+moon_obliquity = 1.5424 # degrees
 T_side = 27.321661         # sidereal period of the moon, in days
 rotation_phase0 = 217.88   # moon's rotation phase at Epoch 0, in degrees
 avg_month_len = 29 + (12 / 24) + ((793 / 1080) / 24)
+days_per_century = 36524.2199 # on average
 
 # psi_cam = 90   # camera position for ~8AM
 # phi_cam = 140
@@ -185,20 +188,60 @@ def n_body_jer(n_jer, p_body):
     return normalize(p_body_jer)
 
 
-def ecliptic_to_equatorial(v, eps=obliquity):
-    x_eq = v[0]
-    y_eq = (np.cos(eps) * v[1]) - (np.sin(eps) * v[2])
-    z_eq = (np.sin(eps) * v[1]) + (np.cos(eps) * v[2])
+def ecliptic_to_equatorial(v, mjd_cur, eps=obliquity):
+    # x_eq = v[0]
+    # y_eq = (np.cos(eps) * v[1]) - (np.sin(eps) * v[2])
+    # z_eq = (np.sin(eps) * v[1]) + (np.cos(eps) * v[2])
 
-    return np.array([x_eq, y_eq, z_eq])
+    r_ec_eq = [[1, 0, 0],
+               [0, np.cos(eps), -np.sin(eps)],
+               [0, np.sin(eps), np.cos(eps)]]
+
+    ## Add precession of earth's axis:
+    cent_since_j2000 = (mjd_cur - mjd_j2000) / days_per_century  # centuries since j2000
+    theta_pre = -(5028.796195 * cent_since_j2000) - (1.1054348 * cent_since_j2000 ** 2)
+
+    # precession rotation matrix
+    p_ec = [[np.cos(theta_pre), -np.sin(theta_pre), 0],
+            [np.sin(theta_pre), np.cos(theta_pre), 0],
+            [0, 0, 1]]
+    p_eq = np.linalg.inv(p_ec)
+
+    prod_inner = np.dot(p_eq, v)
+    eq_p_coords = np.dot(r_ec_eq, prod_inner) * (np.pi / (180*3600))  # radians
+
+    # return np.array([x_eq, y_eq, z_eq])
+    return eq_p_coords
 
 
-def equatorial_to_ecliptic(v, eps=obliquity):
+def equatorial_to_ecliptic(v, mjd_cur, eps=obliquity):
     x_ec = v[0]
     y_ec = (np.cos(eps) * v[1]) + (np.sin(eps) * v[2])
     z_ec = -(np.sin(eps) * v[1]) + (np.cos(eps) * v[2])
 
-    return np.array([x_ec, y_ec, z_ec])
+    # rotation matrix
+    r_eq_ec = [[1, 0, 0],
+               [0, np.cos(eps), np.sin(eps)],
+               [0, -np.sin(eps), np.cos(eps)]]
+
+    # matrix-vector multiplication
+    ec_coords = np.dot(r_eq_ec, v)
+
+    ## Add precession of earth's axis:
+    cent_since_j2000 = (float(mjd_cur) - mjd_j2000) / days_per_century  # centuries since j2000
+    theta_pre_arc_sec = -(5028.796195 * cent_since_j2000) - (1.1054348 * cent_since_j2000**2)  # cur precession angle
+    theta_pre = theta_pre_arc_sec * (np.pi / (180*3600))    # in radians
+
+    # precession rotation matrix
+    p_ec = [[np.cos(theta_pre), -np.sin(theta_pre), 0],
+            [np.sin(theta_pre), np.cos(theta_pre), 0],
+            [0, 0, 1]]
+
+    ec_p_coords = np.dot(p_ec, ec_coords)
+
+    # return np.array([x_ec, y_ec, z_ec])
+    return ec_p_coords
+
 
 
 def phiDifAndTheta(time_zone):
@@ -429,8 +472,8 @@ def zenithAndSunVectors(mjd_cur, phi_dif, theta, positionsArr):
     phi = phi_val(days_since_equinox, phi_dif)
 
     # Jerusalem's normalized position vector
-    n_jer_equ = n_spherical_to_cartesian(theta, phi)            # equatorial coords
-    n_jer_ecl = equatorial_to_ecliptic(n_jer_equ)    # equatorial coords
+    n_jer_equ = n_spherical_to_cartesian(theta, phi)        # equatorial coords
+    n_jer_ecl = equatorial_to_ecliptic(n_jer_equ, mjd_cur)  # ecliptic coords
 
     p_sun = get_pos(mjd_cur, 's', positionsArr)
     p_earth = get_pos(mjd_cur, 'e', positionsArr)
@@ -438,7 +481,7 @@ def zenithAndSunVectors(mjd_cur, phi_dif, theta, positionsArr):
 
     # sun's position relative to Jerusalem
     n_sun_jer = n_body_jer(n_jer_ecl, p_sun)                      # ecliptic coords
-    n_sun_jer_equ = ecliptic_to_equatorial(n_sun_jer)  # equatorial coords
+    n_sun_jer_equ = ecliptic_to_equatorial(n_sun_jer, mjd_cur)  # equatorial coords
 
     return n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ
 
@@ -751,7 +794,7 @@ def psi_vs_phi(year, hour, time_zone, time_difference, positionsArr, start_day=1
 def camera_axes(mjd_cur, p_jer_ecl, positionsArr, obs_axes, center_moon=True):
 
     e_N_equ, e_E_equ, e_Z_equ = obs_axes
-    e_Z_ecl = equatorial_to_ecliptic(e_Z_equ)
+    e_Z_ecl = equatorial_to_ecliptic(e_Z_equ, mjd_cur)
     e_N_ecl = np.array([0, 0, 1])
 
     p_moon = get_pos(mjd_cur, 'm', positionsArr)
@@ -767,7 +810,7 @@ def camera_axes(mjd_cur, p_jer_ecl, positionsArr, obs_axes, center_moon=True):
     # 2. according to user-defined camera angles
     else:
         n_cam_equ = n_from_observer_angles(psi_cam, phi_cam, obs_axes)
-        n_cam = equatorial_to_ecliptic(n_cam_equ)
+        n_cam = equatorial_to_ecliptic(n_cam_equ, mjd_cur)
 
     # Right and Up axis vectors (normalized)
     e_R = np.cross(n_cam, e_Z_ecl)      # relative to the zenith
@@ -830,7 +873,7 @@ def y_vs_x(year, hour, time_zone, time_difference, psi_cam, phi_cam, body, posit
         n_jer_ecl, n_jer_equ, n_sun_jer, n_sun_jer_equ = zenithAndSunVectors(mjd_cur, phi_dif, theta, positionsArr)
 
         p_moon = (get_pos(mjd_cur, 'm', positionsArr) - get_pos(mjd_cur, 'e', positionsArr)) * au_cm
-        p_moon_equ = ecliptic_to_equatorial(p_moon)
+        p_moon_equ = ecliptic_to_equatorial(p_moon, mjd_cur)
 
         # moon's position relative to Jerusalem
         n_moon_jer_equ = n_body_jer(n_jer_equ, p_moon_equ)
@@ -957,10 +1000,10 @@ def plot_sun_moon(mjd_cur, cam_axes, n_jer_ecl, n_sun_jer_ecl, positionsArr):
     return [sun_x, sun_y], [moon_x, moon_y]
 
 
-def drawHorizon(cam_axes, n_jer_equ):
+def drawHorizon(cam_axes, n_jer_equ, mjd_cur):
     n_cam = cam_axes[2]
 
-    e_Z = equatorial_to_ecliptic(n_jer_equ)
+    e_Z = equatorial_to_ecliptic(n_jer_equ, mjd_cur)
     e_R = np.cross(n_cam, e_Z)
     e_R_normal = normalize(e_R)
 
@@ -981,7 +1024,7 @@ def drawHorizon(cam_axes, n_jer_equ):
         plt.plot([points[i][0], points[i+1][0]], [points[i][1], points[i+1][1]], 'b-', markersize=1)
 
 
-def RA_Dec_lines(cam_axes, p_jer_equ):
+def RA_Dec_lines(cam_axes, p_jer_equ, mjd_cur):
 
     # xMin = yMin = -0.999
     # xMax = yMax = 0.999
@@ -1000,7 +1043,7 @@ def RA_Dec_lines(cam_axes, p_jer_equ):
     plt.gca().set_aspect('equal', adjustable='box')
 
     # plot horizon
-    drawHorizon(cam_axes, normalize(p_jer_equ))
+    drawHorizon(cam_axes, normalize(p_jer_equ), mjd_cur)
 
     # RA LINES
     # theta is held constant; phi varies
@@ -1014,7 +1057,7 @@ def RA_Dec_lines(cam_axes, p_jer_equ):
             # Project this point onto x/y plane (i.e. convert to camera coordinates)
             n_equ = n_spherical_to_cartesian(theta, phi)  # unit position vector (centered at earth's center)
             p_equ = celestial_rad * n_equ                 # scaled up by radius of celestial sphere
-            n_ecl = equatorial_to_ecliptic(n_equ)         # unit position vector in ecliptic coordinates
+            n_ecl = equatorial_to_ecliptic(n_equ, mjd_cur)# unit position vector in ecliptic coordinates
             x, y = n_camera_coords(n_ecl, cam_axes)       # finally, in camera coords
 
             if p_equ.dot(p_jer_equ) > 0 and n_equ.dot(n_cam) > 0:  # if visible
@@ -1040,7 +1083,7 @@ def RA_Dec_lines(cam_axes, p_jer_equ):
             # Project this point onto x/y plane (i.e. convert to camera coordinates)
             n_equ = n_spherical_to_cartesian(theta, phi)  # unit position vector (centered at earth's center)
             p_equ = celestial_rad * n_equ                 # scaled up by radius of celestial sphere
-            n_ecl = equatorial_to_ecliptic(n_equ)         # unit position vector in ecliptic coordinates
+            n_ecl = equatorial_to_ecliptic(n_equ, mjd_cur)# unit position vector in ecliptic coordinates
             x, y = n_camera_coords(n_ecl, cam_axes)       # finally, in camera coords
 
             if p_equ.dot(p_jer_equ) > 0 and n_equ.dot(n_cam) > 0:  # if visible
@@ -1082,7 +1125,7 @@ def sky_snapshots(mjd_cur, phi_dif, theta, positionsArr, total_days, steps_per_d
         plt.gca().set_aspect('equal', adjustable='box')
 
         sun_coords, moon_coords = plot_sun_moon(mjd_cur, cam_axes, n_jer_ecl, n_sun_jer_ecl, positionsArr)
-        RA_Dec_lines(cam_axes, n_jer_equ * earth_rad)
+        RA_Dec_lines(cam_axes, n_jer_equ * earth_rad, mjd_cur)
 
         plt.title("MJD:" + str(mjd_cur))
         plt.xlabel("Right", fontfamily="times new roman")
@@ -1406,7 +1449,7 @@ def draw_sun(mjd_cur, cam_axes, p_jer_ecl, imageData, positionsArr):
             s = n_spherical_to_cartesian(theta,
                                          phi) * sun_rad  # vector from center of sun to current point (in moon coords)
             p_s = p_sun + s  # ecliptic coords
-            n_sun_jer_equ = ecliptic_to_equatorial(normalize(p_s - p_jer))
+            n_sun_jer_equ = ecliptic_to_equatorial(normalize(p_s - p_jer), mjd_cur)
             x, y = n_camera_coords(n_sun_jer_equ, cam_axes)  # camera (x-y) coords
 
             # if visible to observer plot as yellow dot...
@@ -1838,7 +1881,7 @@ def ecliptic_np_angles(mjd_cur, total_days, time_step, positionsArr):
     angles = []
 
     # North Pole unit vector
-    n_np = equatorial_to_ecliptic([0, 0, 1])
+    n_np = equatorial_to_ecliptic([0, 0, 1], mjd_cur)
 
     num_iterations = int(total_days/time_step)
 
@@ -1851,7 +1894,7 @@ def ecliptic_np_angles(mjd_cur, total_days, time_step, positionsArr):
         angle = angular_dist(n_np, p_earth_sun)
         times.append(mjd_cur)
         angles.append(angle)
-        print(mjd_cur, angle-(np.pi/2))
+        # print(mjd_cur, angle-(np.pi/2))
         mjd_cur += time_step
 
     return times, angles
@@ -1929,16 +1972,16 @@ def season_times(start_tekufah, start_yr, end_yr):
 
     # build up positionsArr for the requisite number of years
     positionsArr = get_positions(start_yr)
-    for i in range(end_yr - start_yr):
+    for i in range(start_yr+1, end_yr):
         positionsArr += get_positions(i)[1:]
 
     df = pd.DataFrame(columns=['date', 'mjd', 'days since prev equinox/solstice', 'days since this equinox/solstice last year'])
 
     d, m, y = start_tekufah
     mjd_cur = mjd(d, m, y, (0, 0))
-    end_mjd = mjd(0, 0, end_yr, (0, 0)) + 365
+    end_mjd = mjd(0, 0, end_yr, (0, 0))
 
-    prev_season_mjd = 0
+    prev_season_mjd = None
     prev_seasons_q = Queue(maxsize=4)
     this_season_last_yr_mjd = None
 
@@ -1947,31 +1990,79 @@ def season_times(start_tekufah, start_yr, end_yr):
     while mjd_cur <= end_mjd:
         # are we up to an equinox or solstice?
         if prev == 'S':
-            tekufah_mjd = get_equinox_time(mjd_cur, 7, 1/24, positionsArr)
+            tekufah_mjd = get_equinox_time(mjd_cur, 10, 1/24, positionsArr)
             prev = 'E'
         else:
-            tekufah_mjd = get_solstice_time(mjd_cur, 7, 1/24, positionsArr)
+            tekufah_mjd = get_solstice_time(mjd_cur, 10, 1/24, positionsArr)
             prev = 'S'
+
+        if tekufah_mjd == -1: return
 
         # if queue is full, we can get the mjd of this equinox/solstice last year
         if prev_seasons_q.full():
             this_season_last_yr_mjd = prev_seasons_q.get()
 
-        time_since_prev = tekufah_mjd - prev_season_mjd
+        time_since_prev = tekufah_mjd - prev_season_mjd if prev_season_mjd else None
         time_since_prev_cur_season = tekufah_mjd - this_season_last_yr_mjd if this_season_last_yr_mjd else None
 
-        # need function to convert mjd into dd-mm-yyyy and hh:mm:ss
-        date = 'March 21, 2002, 15:48'
+        # function to convert mjd into dd-mm-yyyy and hh:mm:ss
+        date = mjd_to_date(tekufah_mjd)
 
         # add entry to dataframe for this equinox/solstice and corresponding info
-        df = pd.concat([pd.DataFrame([[date, tekufah_mjd, time_since_prev, time_since_prev_cur_season]], columns=df.columns), df], ignore_index=True)
+        # df = pd.concat([pd.DataFrame([[date, tekufah_mjd, time_since_prev, time_since_prev_cur_season]], columns=df.columns), df], ignore_index=True)
+        row = date, tekufah_mjd, time_since_prev, time_since_prev_cur_season
+        df.loc[len(df)] = row
 
+        print(date, tekufah_mjd, time_since_prev, time_since_prev_cur_season)
         # note this mjd
         prev_seasons_q.put(tekufah_mjd)
         prev_season_mjd = tekufah_mjd
 
         i += 1
-        mjd_cur = tekufah_mjd + 88
+        mjd_cur = tekufah_mjd//1 + 88
+
+    return df
+
+
+def mjd_to_date(mjd_cur):
+
+    # count mjd_cur number of days from epoch
+    epoch = (17, 11, 1858, (0, 0))  # 17 November, 1858, 12 am (midnight)
+
+    day_cur, month_cur, yr_cur = epoch[:3]
+    days_counted = 0
+
+    # move to first of next month for cleaner calculations
+    leap = isLeap(yr_cur)
+    month_length = month_len(month_cur, leap)
+    days_counted += month_length - day_cur
+
+    # if we've reached or passed the number of days to count, return date info
+    if days_counted >= mjd_cur:
+        day_cur += int(mjd_cur)
+        return day_cur, month_cur, yr_cur, clean_time((mjd_cur % 1)*24)
+
+    # otherwise, increment month count and keep going
+    month_cur += 1
+
+    while True:
+        leap = isLeap(yr_cur)
+
+        # while we're still in this year
+        while month_cur <= 12:
+            month_length = month_len(month_cur, leap)
+            days_counted += month_length
+
+            # if we've reached or passed the number of days to count, return date info
+            if days_counted >= mjd_cur:
+                day_cur = int(month_length - (days_counted - mjd_cur))
+                return day_cur, month_cur, yr_cur, clean_time((mjd_cur % 1)*24)
+
+            month_cur += 1
+
+        # now move to next year
+        yr_cur += 1
+        month_cur = 1
 
 
 def main():
@@ -2022,4 +2113,7 @@ def main():
 # plot_avg_molad_dif(5765, 9)
 
 start_tekufah = (20, 3, 2000)
-season_times(start_tekufah, start_yr=2000, end_yr=2020)
+df = season_times(start_tekufah, start_yr=2000, end_yr=2021)
+print(tabulate(df, headers='keys'))
+
+
