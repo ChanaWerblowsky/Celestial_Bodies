@@ -52,27 +52,31 @@ def year_of_cycle(year):
     return year % 19 if year % 19 else 19
 
 
-# Returns number of days in hebrew year
-def length_hebrew_yr(leap, year_type):
-    if not leap:
-        if year_type == 'c':    # meleiah (complete)
-            return 355
+# Returns number of days in hebrew year given leap flag and year_type
+def length_hebrew_yr_lookup(leap, year_type):
+    if not leap:    year_type_dict = {'d': 353, 'r': 354, 'c': 355}
+    else:           year_type_dict = {'d': 383, 'r': 384, 'c': 385}
 
-        if year_type == 'r':    # k'sidrah (regular)
-            return 354
+    return year_type_dict[year_type]
 
-        if year_type == 'd':    # chaserah (deficient)
-            return 353
 
-    # if leap year:
-    if year_type == 'c':    # meleiah (complete)
-        return 385
+def length_hebrew_year(year):
 
-    if year_type == 'r':    # k'sidrah (regular)
-        return 384
+    # number of complete 19-year cycles since epoch
+    year_of_lunar_cycle = year_of_cycle(year)
 
-    if year_type == 'd':    # chaserah (deficient)
-        return 383
+    # leap year?
+    if year_of_lunar_cycle in LEAP_YEARS:   hebrew_leap = True
+    else:                                   hebrew_leap = False
+
+    # this year's molad tishrei
+    molad_tishrei = molad_determination(1, year)
+
+    # finally, determine year_type (deficient / regular / complete) and then year length
+    year_type = hebrew_year_type(molad_tishrei, year_of_lunar_cycle, hebrew_leap)[1]
+    year_len = length_hebrew_yr_lookup(hebrew_leap, year_type)
+
+    return year_len
 
 
 # Multiplies time tuple of form (days, hours, chalakim) by an integer; returns new time tuple (dd always <= 6)
@@ -367,7 +371,7 @@ def year_lists():
         # HEBREW YEAR:
 
         # Determine how many days this hebrew year has according to year-type and whether it's a leap year
-        len_hebrew_yr = length_hebrew_yr(hebrew_leap, year_type)
+        len_hebrew_yr = length_hebrew_yr_lookup(hebrew_leap, year_type)
 
         # Finally, determine day number and day of the week of next year's Alef Tishrei
         day_num_hebrew_ny += len_hebrew_yr
