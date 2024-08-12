@@ -47,6 +47,11 @@ def len_hebrew_month(month, leap, year_type):
     return 30
 
 
+# Returns the year of the current lunar cycle
+def year_of_cycle(year):
+    return year % 19 if year % 19 else 19
+
+
 # Returns number of days in hebrew year
 def length_hebrew_yr(leap, year_type):
     if not leap:
@@ -270,15 +275,13 @@ def yr_type_incidence():
     for i in range(19000):
 
         # which year of 19-year cycle is this?
-        year_of_cycle = i % 19
-        if year_of_cycle == 0:
-            year_of_cycle = 19
+        year_of_lunar_cycle = year_of_cycle(i)
 
         # is it a leap year?
-        leap = True if year_of_cycle in {3, 6, 8, 11, 14, 17, 19} else False
+        leap = True if year_of_lunar_cycle in {3, 6, 8, 11, 14, 17, 19} else False
 
         # get year type (tuple)
-        year_type = hebrew_year_type(molad_determination(1, i), year_of_cycle, leap)
+        year_type = hebrew_year_type(molad_determination(1, i), year_of_lunar_cycle, leap)
 
         # if already encountered this year type, increment its tally
         if year_type in d:
@@ -331,9 +334,7 @@ def year_lists():
         # Once know year number, determine whether it's a hebrew/gregorian leap year:
 
         # Given hebrew year, determine which year it is of the current 19-year cycle
-        year_of_lunar_cycle = hebrew_year % 19
-        if year_of_lunar_cycle == 0:
-            year_of_lunar_cycle = 19
+        year_of_lunar_cycle = year_of_cycle(hebrew_year)
 
         # Is it a hebrew leap year? (depends on year of cycle)
         if year_of_lunar_cycle in LEAP_YEARS:
@@ -621,3 +622,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
