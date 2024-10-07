@@ -8,10 +8,8 @@ from tabulate import tabulate
 import cv2
 import glob
 import re
-import os
 from queue import Queue
-from DateConversion import year_lists, molad_determination, \
-    time_addition, time_multiplication, LEAP_YEARS, greg_to_hebrew, hebrew_to_greg, len_hebrew_month
+from DateConversion import year_lists, molad_determination, LEAP_YEARS, hebrew_to_greg, year_of_cycle, length_hebrew_yr, hebrew_year_type
 from SunEarthMoonPosition import get_positions
 from PIL import Image
 from CalendarUtilities import month_len, isLeap, mjd
@@ -43,6 +41,10 @@ T_side = 27.321661         # sidereal period of the moon, in days
 rotation_phase0 = 217.88   # moon's rotation phase at Epoch 0, in degrees
 avg_month_len = 29 + (12 / 24) + ((793 / 1080) / 24)
 days_per_century = 36524.2199 # on average
+# eccentricity = 0.0167 * 2
+eccentricity = 0.0347
+# eccentricity = 0.033
+epoch_Rambam = 30, 3, 1178  # Rambam's epoch (Wednesday night, 3 Nisan, 4938 / March 30, 1178)
 
 # psi_cam = 90   # camera position for ~8AM
 # phi_cam = 140
@@ -56,7 +58,6 @@ phi_cam = 262
 # psi_cam = 86
 # phi_cam = 300
 canvas_size = 256
-
 
 # convert to radians
 radians_day = degrees_day * np.pi/180
@@ -365,60 +366,60 @@ def time_dif(mjd_cur, time_zone, DST_START, DST_END):
         return standard_time_dif
 
 
-# modified julian date
-def mjd(d, m, y, t):
-    epoch = (17, 11, 1858, (0, 0))  # 17 November, 1858, 12 am (midnight)
-
-    days = 0  # days since epoch
-
-    if (d, m, y, t) == epoch:
-        return days  # 0
-
-    if y > epoch[2]:  # this year is past the epoch year
-        start = epoch
-        end = (d, m, y, t)
-
-    elif y < epoch[2]:  # this year precedes the epoch year
-        start = (d, m, y, t)
-        end = epoch
-
-    # complete days remaining from start month (not including start day)
-    days += (month_len(start[1], isLeap(start[2])) - epoch[0])
-
-    # complete months remaining from start year
-    for month in range(start[1] + 1, 13):
-        days += month_len(month, False)  # 1858 (epoch year) was not a leap year
-
-    # complete years between start and end
-    # loop through complete years between epoch year and current year, aggregating their days
-    for year in range(start[2] + 1, end[2]):
-        # is it a leap year?
-        if isLeap(year):
-            days += 366
-        else:
-            days += 365
-
-    # complete months from end year
-    if isLeap(end[2]):
-        leap = True
-    else:
-        leap = False
-
-    for month in range(1, end[1]):
-        days += month_len(month, leap)
-
-    # complete days in end month (not including end day)
-    days += end[0] - 1
-
-    # if date in question is past epoch, must add complete start day (since epoch day is a complete day) and the time that has elapsed in the end day
-    if start == epoch:
-        days += ((end[3][0] + (end[3][1] / 60)) / 24) + 1  # (end[3] = tt)
-
-    # if, however, given date precedes the epoch, only add remainder of start day
-    elif end == epoch:
-        days += ((24 - start[3][0]) + (60 - start[3][1] / 60)) / 24
-
-    return days
+# # modified julian date
+# def mjd(d, m, y, t):
+#     epoch = (17, 11, 1858, (0, 0))  # 17 November, 1858, 12 am (midnight)
+#
+#     days = 0  # days since epoch
+#
+#     if (d, m, y, t) == epoch:
+#         return days  # 0
+#
+#     if y > epoch[2]:  # this year is past the epoch year
+#         start = epoch
+#         end = (d, m, y, t)
+#
+#     elif y < epoch[2]:  # this year precedes the epoch year
+#         start = (d, m, y, t)
+#         end = epoch
+#
+#     # complete days remaining from start month (not including start day)
+#     days += (month_len(start[1], isLeap(start[2])) - epoch[0])
+#
+#     # complete months remaining from start year
+#     for month in range(start[1] + 1, 13):
+#         days += month_len(month, False)  # 1858 (epoch year) was not a leap year
+#
+#     # complete years between start and end
+#     # loop through complete years between epoch year and current year, aggregating their days
+#     for year in range(start[2] + 1, end[2]):
+#         # is it a leap year?
+#         if isLeap(year):
+#             days += 366
+#         else:
+#             days += 365
+#
+#     # complete months from end year
+#     if isLeap(end[2]):
+#         leap = True
+#     else:
+#         leap = False
+#
+#     for month in range(1, end[1]):
+#         days += month_len(month, leap)
+#
+#     # complete days in end month (not including end day)
+#     days += end[0] - 1
+#
+#     # if date in question is past epoch, must add complete start day (since epoch day is a complete day) and the time that has elapsed in the end day
+#     if start == epoch:
+#         days += ((end[3][0] + (end[3][1] / 60)) / 24) + 1  # (end[3] = tt)
+#
+#     # if, however, given date precedes the epoch, only add remainder of start day
+#     elif end == epoch:
+#         days += ((24 - start[3][0]) + (60 - start[3][1] / 60)) / 24
+#
+#     return days
 
 
 # given number of days since equinox, time of equinox in GMT, and phi difference between Greenwich and location in question,
@@ -1684,6 +1685,15 @@ def cur_sun_moon_dist(mjd_cur, positionsArr):
 
     return angular_dist(earth_to_sun, earth_to_moon)
 
+#
+# def cur_sun_earth_angle(mjd_cur, positionsArr):
+#     p_sun = get_pos(mjd_cur, 's', positionsArr)
+#     p_earth = get_pos(mjd_cur, 'e', positionsArr)
+#
+#     earth_to_sun = p_sun - p_earth
+#
+#     return angular_dist(p_sun, p_earth)
+
 
 # returns the mjd of the molad of Tishrei for the given Hebrew year
 def molad_date(year):
@@ -1902,6 +1912,7 @@ def ecliptic_np_angles(mjd_cur, total_days, time_step, positionsArr):
 
 # interpolate using every 3 consecutive hours and corresponding angles determine when angle == 90 degrees
 def get_equinox_time(mjd_cur, total_days, time_step, positionsArr):
+
     times, angles = ecliptic_np_angles(mjd_cur, total_days, time_step, positionsArr)
 
     index = 1
@@ -2065,6 +2076,170 @@ def mjd_to_date(mjd_cur):
         month_cur = 1
 
 
+# angle of sun according to Rambam's calculations
+def cur_sun_or_moon_angle(mjd_cur, angle_name):
+
+    epoch_angle = degrees_per_day = 0
+    if angle_name == 'phi_mean_sun':
+        epoch_angle = 7 + 3 / 60 + 32 / 3600
+        # degrees_per_100_days = 98 + 33 / 60 + 53 / 3600
+        degrees_per_100_days = 98 + 33 / 60 + 52.319 / 3600
+        degrees_per_day = degrees_per_100_days / 100
+
+    elif angle_name == 'aphelion':
+        epoch_angle = 86 + 45 / 60 + 8 / 3600
+        # epoch_angle = 86 + 45 / 60 + 1150 / 3600
+        # degrees_per_day = (15/3600) / 100
+        degrees_per_day = (18.6/3600) / 100
+
+    elif angle_name == 'emtzah_hayareach':
+        epoch_angle = 31 + 14/60 + 43/3600
+        degrees_per_day = 13 + 10/60 + 35/(60**2) + 1/(60**3) + 48/(60**4)
+
+    elif angle_name == 'emtzah_hamaslul':
+        epoch_angle = 84 + 28/60 + 42/3600
+        # degrees_per_day = 13 + 3/60 + 54/3600
+        degrees_per_day = 13 + 3/60 + 53.9383/3600
+
+
+    # calculate number of days since Rambam's epoch (Wednesday night, 3 Nisan 4938 / March 1 1178 (6pm?))
+    epoch_d_greg, epoch_m_greg, epoch_y_greg = 30, 3, 1178  # epoch in Gregorian calendar
+    mjd_epoch = mjd(epoch_Rambam[0], epoch_Rambam[1], epoch_Rambam[2], (0, 0))  # epoch mjd
+    days_since_epoch = mjd_cur - mjd_epoch
+
+    angle_traversed = days_since_epoch * degrees_per_day
+    cur_angle = (epoch_angle + angle_traversed) % 360
+    # cur_angle = cur_angle * np.pi/180
+
+    return cur_angle
+
+
+# compare position of sun calculated using 3-body code against that using Rambam's calculations
+def compare_sun_angles(mjd_cur, year):
+
+    positionsArr = get_positions(year)[:-1] + get_positions(year+1)[:-1] + get_positions(year+2)
+    mjd_list = []
+    phi_Rambam_list = []
+    phi_calc_list = []
+
+    for i in range(365):
+
+        phi_mean = cur_sun_or_moon_angle(mjd_cur, angle_name='phi_mean')  # makom hashemesh ha'emtzai
+        aphelion = cur_sun_or_moon_angle(mjd_cur, angle_name='aphelion')  # govah hashemesh
+
+        alpha = phi_mean - aphelion  # maslul hashemesh
+        if alpha < 0: alpha += 2*np.pi
+
+        gamma = np.arctan2(np.sin(alpha), np.cos(alpha) + eccentricity)
+        # beta = np.abs(gamma - alpha)
+
+        phi_act = ((gamma + aphelion) * 180/np.pi) % 360
+
+        ## compare against sun position obtained using
+        p_earth = get_pos(mjd_cur, 'e', positionsArr)
+        p_sun = get_pos(mjd_cur, 's', positionsArr)
+        p_earth_sun = p_sun - p_earth
+
+        phi_calc = np.arctan2(float(p_earth_sun[1]), float(p_earth_sun[0])) * 180/np.pi
+        if phi_calc < 0: phi_calc += 360
+        #####
+
+        print(phi_calc, phi_act)
+        mjd_list.append(mjd_cur)
+        phi_Rambam_list.append(phi_act)
+        phi_calc_list.append(phi_calc)
+
+        mjd_cur += 1
+
+    deltas = np.array(phi_calc_list) - np.array(phi_Rambam_list)
+    deltas = np.array([d + 360 if np.abs(d) > 100 else d for d in deltas])
+    plt.scatter(mjd_list, deltas)
+    plt.xlabel('mjd')
+    plt.ylabel('phi_code - phi_Rambam (degrees)')
+    plt.show()
+
+    sum_of_squared_errors = np.sum(deltas**2)
+    print(sum_of_squared_errors)
+
+    return phi_mean, phi_calc
+
+
+def moon_pos_Rambam(mjd_cur):
+
+    emtzah_hashemesh = cur_sun_or_moon_angle(mjd_cur, 'phi_mean_sun')
+    emtzah_hayareach = cur_sun_or_moon_angle(mjd_cur, 'emtzah_hayareach')
+    emtzah_hamaslul = cur_sun_or_moon_angle(mjd_cur, 'emtzah_hamaslul')
+
+    merchak = emtzah_hayareach - emtzah_hashemesh
+    hamerchak_hakaful = 2 * merchak
+    print(hamerchak_hakaful)
+    tosefes = 0
+    if 6 <= hamerchak_hakaful <= 11:    tosefes = 1
+    elif 12 <= hamerchak_hakaful <= 18:  tosefes = 2
+    elif 19 <= hamerchak_hakaful <= 24:  tosefes = 3
+    elif 25 <= hamerchak_hakaful <= 31:  tosefes = 4
+    elif 32 <= hamerchak_hakaful <= 38:  tosefes = 5
+    elif 39 <= hamerchak_hakaful <= 45:  tosefes = 6
+    elif 46 <= hamerchak_hakaful <= 51:  tosefes = 7
+    elif 52 <= hamerchak_hakaful <= 59:  tosefes = 8
+    elif 60 <= hamerchak_hakaful <= 63:  tosefes = 9
+
+    tosefes_2 = int(np.arcsin((10.3167*np.sin(hamerchak_hakaful)) / (39.3667 - 10.3167*np.cos(hamerchak_hakaful))))
+    print(tosefes, tosefes_2)
+    maslul_hanachon = emtzah_hamaslul + tosefes
+
+    # look up m'nas hamaslul hanachon given maslul hanachon (interpolate)
+    mnas_hamaslul_x = [i for i in range(0, 181, 10)]
+    mnas_hamaslul_y = [0, 50/60, 1+(38/60), 2+(24/60), 3+(6/60), 3+(44/60), 4+(16/60), 4+(41/60), 5, 5+(5/60),
+                        5+(8/60), 4+(59/60), 4+(40/60), 4+(11/60), 3+(33/60), 2+(48/60), 1+(56/60), 59/60, 0]
+
+    if maslul_hanachon > 180:
+        mnas_hamaslul = np.interp(360-maslul_hanachon, mnas_hamaslul_x, mnas_hamaslul_y)
+    else:
+        mnas_hamaslul = -np.interp(maslul_hanachon, mnas_hamaslul_x, mnas_hamaslul_y)
+
+    makom_hayareach_haamiti = emtzah_hayareach + mnas_hamaslul
+
+    return makom_hayareach_haamiti
+
+
+def compare_moon_angles(mjd_cur, year):
+
+    positionsArr = get_positions(year)[:-1] + get_positions(year + 1)[:-1] + get_positions(year + 2)
+    mjd_list = []
+    phi_Rambam_list = []
+    phi_code_list = []
+
+    for i in range(50):
+        Rambam_moon_pos = moon_pos_Rambam(mjd_cur)
+
+        p_moon = get_pos(mjd_cur, 'm', positionsArr)
+        p_earth = get_pos(mjd_cur, 'e', positionsArr)
+        p_earth_moon = p_moon - p_earth
+
+        code_moon_pos = np.arctan2(float(p_earth_moon[1]), float(p_earth_moon[0])) * 180/np.pi
+        if code_moon_pos < 0: code_moon_pos += 360
+
+        print(code_moon_pos, Rambam_moon_pos)
+        mjd_list.append(mjd_cur)
+        phi_Rambam_list.append(Rambam_moon_pos)
+        phi_code_list.append(code_moon_pos)
+
+        mjd_cur += 1
+
+    deltas = np.array(phi_code_list) - np.array(phi_Rambam_list)
+    deltas = np.array([d + 360 if np.abs(d) > 100 else d for d in deltas])
+    plt.scatter(mjd_list, deltas)
+    plt.xlabel('mjd')
+    plt.ylabel('phi_code - phi_Rambam (degrees)')
+    plt.show()
+
+    sum_of_squared_errors = np.sum(deltas**2)
+    print(sum_of_squared_errors)
+
+    return code_moon_pos, Rambam_moon_pos
+
+
 def main():
 
     year = int(input("Year: "))
@@ -2112,8 +2287,17 @@ def main():
 
 # plot_avg_molad_dif(5765, 9)
 
-start_tekufah = (20, 3, 2000)
-df = season_times(start_tekufah, start_yr=2000, end_yr=2021)
-print(tabulate(df, headers='keys'))
 
+## Chart comparing calculated equinox/solstice times with actual
+# start_tekufah = (20, 3, 2000)
+# df = season_times(start_tekufah, start_yr=2000, end_yr=2025)
+# print(tabulate(df, headers='keys'))
+
+## Compare position of the sun (phi) using Rambam's calculations against those obtained using Symplectic integrator
+# mjd_cur = mjd(15, 8, 2024, (0, 0))
+# compare_sun_angles(mjd_cur, 2024)
+
+mjd_cur = mjd(1, 10, 2024, (19, 0))
+# mjd_cur = mjd(28, 4, 1178, (0, 0))
+compare_moon_angles(mjd_cur, 2024)
 
