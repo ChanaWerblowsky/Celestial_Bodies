@@ -37,7 +37,7 @@ def mjd(dd, mm, yy, tt):
         end = epoch
 
     # complete days remaining from start month (not including start day)
-    days += (month_len(start[1], isLeap(start[2])) - epoch[0])
+    days += (month_len(start[1], isLeap(start[2])) - start[0])
 
     # complete months remaining from start year
     for month in range(start[1] + 1, 13):
@@ -53,10 +53,8 @@ def mjd(dd, mm, yy, tt):
             days += 365
 
     # complete months from end year
-    if isLeap(end[2]):
-        leap = True
-    else:
-        leap = False
+    if isLeap(end[2]):  leap = True
+    else:               leap = False
 
     for month in range(1, end[1]):
         days += month_len(month, leap)
@@ -70,6 +68,8 @@ def mjd(dd, mm, yy, tt):
 
     # if, however, given date precedes the epoch, only add remainder of start day
     elif end == epoch:
-        days += ((24 - start[3][0]) + (60 - start[3][1] / 60)) / 24
+        elapsed_start_day = (start[3][0] + (start[3][1])/60) / 24
+        days += 1 - elapsed_start_day
+        days = -days
 
     return days
