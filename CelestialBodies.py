@@ -1,3 +1,4 @@
+import random
 
 import numpy as np
 from sympy import *
@@ -26,6 +27,8 @@ degrees_day = 360.98561     # degrees that Earth rotates in a day
 equinox_time = (15, 33)     # GMT
 mjd_equinox = 59658.64791666667
 mjd_j2000 = 51544
+epoch_Rambam = 30, 3, 1178  # Rambam's epoch (Wednesday night, 3 Nisan, 4938 / March 30, 1178)
+mjd_Rambam_epoch = mjd(epoch_Rambam[0], epoch_Rambam[1], epoch_Rambam[2], (0, 0))  # epoch mjd
 phi_jer = 35.214        # degrees
 phi_ny = -74.006        # degrees
 phi_texas = -97.7431
@@ -44,12 +47,6 @@ days_per_century = 36524.2199 # on average
 # eccentricity = 0.0167 * 2
 eccentricity = 0.0347
 # eccentricity = 0.033
-epoch_Rambam = 30, 3, 1178  # Rambam's epoch (Wednesday night, 3 Nisan, 4938 / March 30, 1178)
-
-# psi_cam = 90   # camera position for ~8AM
-# phi_cam = 140
-# psi_cam = 0.1  # camera position for ~12PM
-# phi_cam = 180
 
 ## 3/10/24:
 psi_cam = 86
@@ -58,6 +55,9 @@ phi_cam = 262
 # psi_cam = 86
 # phi_cam = 300
 canvas_size = 256
+
+psi_cam = 90
+phi_cam = 270
 
 # convert to radians
 radians_day = degrees_day * np.pi/180
@@ -1157,6 +1157,67 @@ def sky_snapshots(mjd_cur, phi_dif, theta, positionsArr, total_days, steps_per_d
         mjd_cur += (1/steps_per_day)
 
 
+def plot_ecliptic(cam_axes):
+    ecliptic_points = []
+    ecliptic_rad = 100 * au_cm
+
+    # plot ecliptic
+    for phi in range(0, 360):
+        phi_rad = phi * np.pi / 180
+        n_star = normalize(np.array([ecliptic_rad * np.cos(phi_rad), ecliptic_rad * np.sin(phi_rad), 0]))
+        x, y = n_camera_coords(n_star, cam_axes)
+
+        ecliptic_points.append([x, y])
+
+
+    for i in range(len(ecliptic_points) - 1):
+        plt.plot([ecliptic_points[i][0], ecliptic_points[i + 1][0]], [ecliptic_points[i][1], ecliptic_points[i + 1][1]], 'r-')
+
+
+
+def sky_snapshots2(mjd_cur, phi_dif, theta, positionsArr, total_days, steps_per_day):
+
+    sun_trail = []
+    moon_trail = []
+
+    num_iterations = int(total_days * steps_per_day)
+    for i in range(num_iterations):
+        print(i)
+        n_jer_ecl, n_jer_equ, n_sun_jer_ecl, n_sun_jer_equ = zenithAndSunVectors(mjd_cur, phi_dif, theta, positionsArr)
+
+        obs_axes = observer_axes(n_jer_equ)
+        cam_axes = camera_axes(mjd_cur, n_jer_ecl*earth_rad, positionsArr, obs_axes, center_moon=False)
+
+        # plot RA and Dec lines and sun/moon
+        f = plt.figure()
+        plt.gca().set_aspect('equal', adjustable='box')
+
+        sun_coords, moon_coords = plot_sun_moon(mjd_cur, cam_axes, n_jer_ecl, n_sun_jer_ecl, positionsArr)
+        RA_Dec_lines(cam_axes, n_jer_equ * earth_rad, mjd_cur)
+
+        # plot sun and moon trails
+        sun_trail.append(sun_coords)
+        moon_trail.append(moon_coords)
+
+        for j in range(len(sun_trail)-1):
+            plt.plot([sun_trail[j][0], sun_trail[j + 1][0]], [sun_trail[j][1], sun_trail[j + 1][1]], 'r-')
+
+        for j in range(len(moon_trail)-1):
+            plt.plot([moon_trail[j][0], moon_trail[j + 1][0]], [moon_trail[j][1], moon_trail[j + 1][1]], 'k-')
+
+        plot_ecliptic(cam_axes)
+
+        plt.title("MJD:" + str(mjd_cur))
+        plt.xlabel("Right", fontfamily="times new roman")
+        plt.ylabel("Up", fontfamily="times new roman")
+
+        plt.show()
+        # f.savefig("./SkyMaps/"+str(i))
+        plt.close()
+
+        mjd_cur += (1/steps_per_day)
+
+
 def natural_sort_key(s, _nsre=re.compile('([0-9]+)')):
     return [
         int(text)
@@ -1293,8 +1354,7 @@ def rotated_moon_axes(mjd_cur, eps=moon_obliquity):
     em_y = np.array([0, np.cos(eps), np.sin(eps)])
     em_z = np.array([0, -np.sin(eps), np.cos(eps)])
 
-    mjd_epoch = mjd(1, 1, 2000, (0, 0))
-    days_since_epoch = mjd_cur - mjd_epoch
+    days_since_epoch = mjd_cur - mjd_j2000
 
     rotation_phase = rotation_phase0 + ((2 * np.pi * days_since_epoch) / T_side)
 
@@ -2076,168 +2136,315 @@ def mjd_to_date(mjd_cur):
         month_cur = 1
 
 
-# angle of sun according to Rambam's calculations
-def cur_sun_or_moon_angle(mjd_cur, angle_name):
+# calculates solar longitude, lunar longitude, and lunar latitude once a day from start_year til end_year (not inclusive)
+# writes datapoints to a file
+def write_sun_moon_longitude_and_latitude(start_year, end_year, out_file_path):
 
-    epoch_angle = degrees_per_day = 0
-    if angle_name == 'phi_mean_sun':
-        epoch_angle = 7 + 3 / 60 + 32 / 3600
-        # degrees_per_100_days = 98 + 33 / 60 + 53 / 3600
-        degrees_per_100_days = 98 + 33 / 60 + 52.319 / 3600
-        degrees_per_day = degrees_per_100_days / 100
+    # build up positionsArr
+    positionsArr = get_positions(start_year)
+    for i in range(start_year+1, end_year):
+        positionsArr += get_positions(i)[1:]
 
-    elif angle_name == 'aphelion':
-        epoch_angle = 86 + 45 / 60 + 8 / 3600
-        # epoch_angle = 86 + 45 / 60 + 1150 / 3600
-        # degrees_per_day = (15/3600) / 100
-        degrees_per_day = (18.6/3600) / 100
+    out_file = open(out_file_path, 'w')
+    out_file.close()
+    out_file = open(out_file_path, 'a')
 
-    elif angle_name == 'emtzah_hayareach':
-        epoch_angle = 31 + 14/60 + 43/3600
-        degrees_per_day = 13 + 10/60 + 35/(60**2) + 1/(60**3) + 48/(60**4)
+    mjd_cur = mjd(1, 1, start_year, (0, 0))
+    mjd_end = mjd(1, 1, end_year, (0, 0))
 
-    elif angle_name == 'emtzah_hamaslul':
-        epoch_angle = 84 + 28/60 + 42/3600
-        # degrees_per_day = 13 + 3/60 + 54/3600
-        degrees_per_day = 13 + 3/60 + 53.9383/3600
+    while mjd_cur < mjd_end:
+        p_sun = get_pos(mjd_cur, 's', positionsArr)
+        p_earth = get_pos(mjd_cur, 'e', positionsArr)
+        p_moon = get_pos(mjd_cur, 'm', positionsArr)
+        p_earth_sun = p_sun - p_earth
+        p_earth_moon = p_moon - p_earth
+
+        # solar longitude
+        sun_longitude = np.arctan2(float(p_earth_sun[1]), float(p_earth_sun[0])) * 180/np.pi
+        if sun_longitude < 0: sun_longitude += 360
+
+        # lunar longitude and latitude
+        moon_longitude = np.arctan2(float(p_earth_moon[1]), float(p_earth_moon[0])) * 180 / np.pi
+        moon_latitude = np.arcsin(float(p_earth_moon[2])/length(p_earth_moon)) * 180 / np.pi
+        if moon_longitude < 0: moon_longitude += 360
+
+        cur_day_data = f'{mjd_cur} {sun_longitude} {moon_longitude} {moon_latitude}\n'
+        out_file.write(cur_day_data)
+        mjd_cur += 1
+
+    out_file.close()
 
 
-    # calculate number of days since Rambam's epoch (Wednesday night, 3 Nisan 4938 / March 1 1178 (6pm?))
-    epoch_d_greg, epoch_m_greg, epoch_y_greg = 30, 3, 1178  # epoch in Gregorian calendar
-    mjd_epoch = mjd(epoch_Rambam[0], epoch_Rambam[1], epoch_Rambam[2], (0, 0))  # epoch mjd
-    days_since_epoch = mjd_cur - mjd_epoch
+def cur_angle2(mjd_cur, epoch_angle, degrees_per_day):
 
+    days_since_epoch = mjd_cur - mjd_Rambam_epoch
     angle_traversed = days_since_epoch * degrees_per_day
     cur_angle = (epoch_angle + angle_traversed) % 360
-    # cur_angle = cur_angle * np.pi/180
 
     return cur_angle
 
 
-# compare position of sun calculated using 3-body code against that using Rambam's calculations
-def compare_sun_angles(mjd_cur, year):
+def sun_longitude_Rambam2(mjd_cur, cur_model):
 
-    positionsArr = get_positions(year)[:-1] + get_positions(year+1)[:-1] + get_positions(year+2)
-    mjd_list = []
-    phi_Rambam_list = []
-    phi_calc_list = []
+    cur_mean_longitude = cur_angle2(mjd_cur, cur_model.mean_sun_long_at_epoch, cur_model.mean_sun_long_rate) * np.pi/180
+    cur_aphelion = cur_angle2(mjd_cur, cur_model.aphelion_at_epoch, cur_model.aphelion_rate) * np.pi/180
+    alpha = cur_mean_longitude - cur_aphelion
+    if alpha < 0: alpha += 2 * np.pi
 
-    for i in range(365):
+    gamma = np.arctan2(np.sin(alpha), np.cos(alpha) + eccentricity)
 
-        phi_mean = cur_sun_or_moon_angle(mjd_cur, angle_name='phi_mean')  # makom hashemesh ha'emtzai
-        aphelion = cur_sun_or_moon_angle(mjd_cur, angle_name='aphelion')  # govah hashemesh
-
-        alpha = phi_mean - aphelion  # maslul hashemesh
-        if alpha < 0: alpha += 2*np.pi
-
-        gamma = np.arctan2(np.sin(alpha), np.cos(alpha) + eccentricity)
-        # beta = np.abs(gamma - alpha)
-
-        phi_act = ((gamma + aphelion) * 180/np.pi) % 360
-
-        ## compare against sun position obtained using
-        p_earth = get_pos(mjd_cur, 'e', positionsArr)
-        p_sun = get_pos(mjd_cur, 's', positionsArr)
-        p_earth_sun = p_sun - p_earth
-
-        phi_calc = np.arctan2(float(p_earth_sun[1]), float(p_earth_sun[0])) * 180/np.pi
-        if phi_calc < 0: phi_calc += 360
-        #####
-
-        print(phi_calc, phi_act)
-        mjd_list.append(mjd_cur)
-        phi_Rambam_list.append(phi_act)
-        phi_calc_list.append(phi_calc)
-
-        mjd_cur += 1
-
-    deltas = np.array(phi_calc_list) - np.array(phi_Rambam_list)
-    deltas = np.array([d + 360 if np.abs(d) > 100 else d for d in deltas])
-    plt.scatter(mjd_list, deltas)
-    plt.xlabel('mjd')
-    plt.ylabel('phi_code - phi_Rambam (degrees)')
-    plt.show()
-
-    sum_of_squared_errors = np.sum(deltas**2)
-    print(sum_of_squared_errors)
-
-    return phi_mean, phi_calc
+    return ((gamma + cur_aphelion) * 180 / np.pi) % 360
 
 
-def moon_pos_Rambam(mjd_cur):
-
-    emtzah_hashemesh = cur_sun_or_moon_angle(mjd_cur, 'phi_mean_sun')
-    emtzah_hayareach = cur_sun_or_moon_angle(mjd_cur, 'emtzah_hayareach')
-    emtzah_hamaslul = cur_sun_or_moon_angle(mjd_cur, 'emtzah_hamaslul')
-
-    merchak = emtzah_hayareach - emtzah_hashemesh
-    hamerchak_hakaful = 2 * merchak
-    print(hamerchak_hakaful)
+def get_tosefes(double_elongation):
     tosefes = 0
-    if 6 <= hamerchak_hakaful <= 11:    tosefes = 1
-    elif 12 <= hamerchak_hakaful <= 18:  tosefes = 2
-    elif 19 <= hamerchak_hakaful <= 24:  tosefes = 3
-    elif 25 <= hamerchak_hakaful <= 31:  tosefes = 4
-    elif 32 <= hamerchak_hakaful <= 38:  tosefes = 5
-    elif 39 <= hamerchak_hakaful <= 45:  tosefes = 6
-    elif 46 <= hamerchak_hakaful <= 51:  tosefes = 7
-    elif 52 <= hamerchak_hakaful <= 59:  tosefes = 8
-    elif 60 <= hamerchak_hakaful <= 63:  tosefes = 9
+    if 6 <= double_elongation <= 11:
+        tosefes = 1
+    elif 12 <= double_elongation <= 18:
+        tosefes = 2
+    elif 19 <= double_elongation <= 24:
+        tosefes = 3
+    elif 25 <= double_elongation <= 31:
+        tosefes = 4
+    elif 32 <= double_elongation <= 38:
+        tosefes = 5
+    elif 39 <= double_elongation <= 45:
+        tosefes = 6
+    elif 46 <= double_elongation <= 51:
+        tosefes = 7
+    elif 52 <= double_elongation <= 59:
+        tosefes = 8
+    elif 60 <= double_elongation <= 63:
+        tosefes = 9
 
-    tosefes_2 = int(np.arcsin((10.3167*np.sin(hamerchak_hakaful)) / (39.3667 - 10.3167*np.cos(hamerchak_hakaful))))
-    print(tosefes, tosefes_2)
-    maslul_hanachon = emtzah_hamaslul + tosefes
+    # e_1 = 10.3167
+    # R = 49.6833
+    # R_prime = e_1 * np.cos(hamerchak_hakaful) + np.sqrt(R**2 + (e_1**2 * (np.cos(hamerchak_hakaful)**2 - 1)))
+    # R_double_prime = np.sqrt(R_prime**2 + e_1**2 - (2 * e_1 * R_prime * np.cos(np.pi-hamerchak_hakaful)))
+    # tosefes_2 = np.arccos((R_prime**2 + R_double_prime**2 - e_1**2) / (2 * R_prime * R_double_prime))
+    # print(tosefes, tosefes_2)
+    return tosefes
+
+
+def moon_longitude_Rambam2(mjd_cur, cur_model):
+
+    mean_sun_long = cur_angle2(mjd_cur, cur_model.mean_sun_long_at_epoch, cur_model.mean_sun_long_rate)
+    mean_moon_long = cur_angle2(mjd_cur, cur_model.mean_moon_long_at_epoch, cur_model.mean_moon_long_rate)
+    mean_moon_path = cur_angle2(mjd_cur, cur_model.mean_moon_path_at_epoch, cur_model.mean_moon_path_rate)
+
+    elongation = mean_moon_long - mean_sun_long
+    double_elongation = 2 * elongation
+
+    tosefes = get_tosefes(double_elongation)
+
+    correct_moon_course = mean_moon_path + tosefes
 
     # look up m'nas hamaslul hanachon given maslul hanachon (interpolate)
     mnas_hamaslul_x = [i for i in range(0, 181, 10)]
-    mnas_hamaslul_y = [0, 50/60, 1+(38/60), 2+(24/60), 3+(6/60), 3+(44/60), 4+(16/60), 4+(41/60), 5, 5+(5/60),
-                        5+(8/60), 4+(59/60), 4+(40/60), 4+(11/60), 3+(33/60), 2+(48/60), 1+(56/60), 59/60, 0]
+    mnas_hamaslul_y = np.array([0, 50/60, 1+(38/60), 2+(24/60), 3+(6/60), 3+(44/60), 4+(16/60), 4+(41/60), 5, 5+(5/60),
+                        5+(8/60), 4+(59/60), 4+(40/60), 4+(11/60), 3+(33/60), 2+(48/60), 1+(56/60), 59/60, 0]) * cur_model.e1
 
-    if maslul_hanachon > 180:
-        mnas_hamaslul = np.interp(360-maslul_hanachon, mnas_hamaslul_x, mnas_hamaslul_y)
+    if correct_moon_course > 180:
+        mnas_hamaslul = np.interp(360 - correct_moon_course, mnas_hamaslul_x, mnas_hamaslul_y)
     else:
-        mnas_hamaslul = -np.interp(maslul_hanachon, mnas_hamaslul_x, mnas_hamaslul_y)
+        mnas_hamaslul = -np.interp(correct_moon_course, mnas_hamaslul_x, mnas_hamaslul_y)
 
-    makom_hayareach_haamiti = emtzah_hayareach + mnas_hamaslul
+    true_moon_longitude = mean_moon_long + mnas_hamaslul
 
-    return makom_hayareach_haamiti
+    if true_moon_longitude < 0: true_moon_longitude += 360
+
+    return true_moon_longitude
 
 
-def compare_moon_angles(mjd_cur, year):
+def moon_latitude_Rambam2(mjd_cur, true_moon_longitude, cur_model):
+    mean_head_long = cur_angle2(mjd_cur, cur_model.mean_head_long_at_epoch, cur_model.mean_head_long_rate)
 
-    positionsArr = get_positions(year)[:-1] + get_positions(year + 1)[:-1] + get_positions(year + 2)
-    mjd_list = []
-    phi_Rambam_list = []
-    phi_code_list = []
+    maslul_harochav = true_moon_longitude - mean_head_long
+    if maslul_harochav < 0: maslul_harochav += 360
 
-    for i in range(50):
-        Rambam_moon_pos = moon_pos_Rambam(mjd_cur)
+    direction = 'N'
+    if 90 <= maslul_harochav <= 180:
+        maslul_harochav = 180 - maslul_harochav
 
-        p_moon = get_pos(mjd_cur, 'm', positionsArr)
-        p_earth = get_pos(mjd_cur, 'e', positionsArr)
-        p_earth_moon = p_moon - p_earth
+    elif 180 < maslul_harochav <= 270:
+        maslul_harochav = maslul_harochav - 180
+        direction = 'S'
 
-        code_moon_pos = np.arctan2(float(p_earth_moon[1]), float(p_earth_moon[0])) * 180/np.pi
-        if code_moon_pos < 0: code_moon_pos += 360
+    elif 270 < maslul_harochav <= 360:
+        maslul_harochav = 360 - maslul_harochav
+        direction = 'S'
 
-        print(code_moon_pos, Rambam_moon_pos)
-        mjd_list.append(mjd_cur)
-        phi_Rambam_list.append(Rambam_moon_pos)
-        phi_code_list.append(code_moon_pos)
+    # use maslul harochav to determine declination (given Rambam's table)
+    mnas_hamaslul_x = [i for i in range(0, 91, 10)]
+    # mnas_hamaslul_y = np.array([0, 52/60, 1+(43/60), 2+(30/60), 3+(13/60), 3+(50/60), 4+(20/60), 4+(42/60), 4+(55/60), 5]) * (5+14/60)/5
+    mnas_hamaslul_y = np.array([0, 52/60, 1+(43/60), 2+(30/60), 3+(13/60), 3+(50/60), 4+(20/60), 4+(42/60), 4+(55/60), 5]) * cur_model.e2
 
-        mjd_cur += 1
+    true_moon_latitude = np.interp(maslul_harochav, mnas_hamaslul_x, mnas_hamaslul_y)
+    if direction == 'S': true_moon_latitude = -true_moon_latitude
 
-    deltas = np.array(phi_code_list) - np.array(phi_Rambam_list)
-    deltas = np.array([d + 360 if np.abs(d) > 100 else d for d in deltas])
-    plt.scatter(mjd_list, deltas)
-    plt.xlabel('mjd')
-    plt.ylabel('phi_code - phi_Rambam (degrees)')
-    plt.show()
+    return true_moon_latitude
 
-    sum_of_squared_errors = np.sum(deltas**2)
-    print(sum_of_squared_errors)
 
-    return code_moon_pos, Rambam_moon_pos
+def visible(sun_long, moon_long, moon_lat):
+    first_longitude = moon_long - sun_long
+    first_latitude = moon_lat
+
+
+
+class Model(object):
+    def __init__(self, mean_sun_long_at_epoch, mean_sun_long_rate, aphelion_at_epoch, aphelion_rate, mean_moon_long_at_epoch, mean_moon_long_rate, mean_moon_path_at_epoch, mean_moon_path_rate, mean_head_long_at_epoch, mean_head_long_rate, e1, e2):
+        self.mean_sun_long_at_epoch = mean_sun_long_at_epoch
+        self.mean_sun_long_rate = mean_sun_long_rate
+        self.aphelion_at_epoch = aphelion_at_epoch
+        self.aphelion_rate = aphelion_rate
+        self.mean_moon_long_at_epoch = mean_moon_long_at_epoch
+        self.mean_moon_long_rate = mean_moon_long_rate
+        self.mean_moon_path_at_epoch = mean_moon_path_at_epoch
+        self.mean_moon_path_rate = mean_moon_path_rate
+        self.mean_head_long_at_epoch = mean_head_long_at_epoch
+        self.mean_head_long_rate = mean_head_long_rate
+        self.e1 = e1
+        self.e2 = e2
+
+    def update_params(self, alpha):
+        for attr in self.__dict__:
+            attr = attr*alpha
+
+
+def select_n_rows(file_path, n):
+    with open(file_path, 'r') as f:
+        df = pd.read_table(file_path, delimiter=' ', names=['mjd', 'sun_longitude', 'moon_longitude', 'moon_latitude'], index_col=0)
+        n_random_rows = df.sample(n, random_state=2).sort_index()
+    return n_random_rows
+
+
+# then, read in file and compare angles with Rambam's values
+def compare_angles(df, cur_model=None):
+
+    # add columns for Rambam's angles
+    df['sun_long_Rambam'] = ''
+    df['moon_long_Rambam'] = ''
+    df['moon_lat_Rambam'] = ''
+
+    for index, row in df.iterrows():
+        mjd_cur = index
+
+        # calculate angles using Rambam for cur mjd
+        # sun_long_Rambam = sun_longitude_Rambam(mjd_cur)
+        # moon_long_Rambam = moon_longitude_Rambam(mjd_cur)
+        # moon_lat_Rambam = moon_latitude_Rambam(mjd_cur, moon_long_Rambam)
+
+        sun_long_Rambam = sun_longitude_Rambam2(mjd_cur, cur_model)
+        moon_long_Rambam = moon_longitude_Rambam2(mjd_cur, cur_model)
+        moon_lat_Rambam = moon_latitude_Rambam2(mjd_cur, moon_long_Rambam, cur_model)
+
+        # and add to df
+        df.loc[mjd_cur, 'sun_long_Rambam'] = sun_long_Rambam
+        df.loc[mjd_cur, 'moon_long_Rambam'] = moon_long_Rambam
+        df.loc[mjd_cur, 'moon_lat_Rambam'] = moon_lat_Rambam
+
+    # print(tabulate(df.head(10), headers='keys'))
+
+    # error calculations
+    residuals = []
+    # for i in range(3):
+    for i in range(1):
+
+        col_name = df.columns[i]
+        expected = np.array(df[df.columns[i]])
+        actual = np.array(df[df.columns[i + 3]])
+        cur_residuals = np.arcsin(np.sin((expected - actual).astype(float)*np.pi/180)) * 180/np.pi
+        residuals += list(cur_residuals)
+
+        plt.scatter(df.index, cur_residuals)
+        plt.title(col_name)
+        plt.xlabel('mjd')
+        plt.ylabel("residuals (data-model, degrees)")
+        # plt.xlim(52500, 54000)
+        plt.show()
+
+    chi_squared_error = np.sum(np.array(residuals) ** 2)
+
+    return chi_squared_error
+
+
+# find values of epoch and rate angles that minimize the chi-squared error for sun/moon longitude and moon latitude
+def mcmc(file_path, n):
+
+    # data
+    df = select_n_rows(file_path, n)
+
+    # prior parameter values
+    mean_sun_long_at_epoch = 7 + 3 / 60 + 32 / 3600
+    mean_sun_long_rate = (98 + 33 / 60 + 52.3 / 3600) / 100
+    # mean_sun_long_rate = (98 + 33 / 60 + 53 / 3600) / 100
+    aphelion_at_epoch = 86 + 45 / 60 + 8 / 3600
+    aphelion_rate = (18.6/3600) / 100
+    # aphelion_rate = (15/3600) / 100
+    mean_moon_long_at_epoch = 31 + 14/60 + 43/3600
+    mean_moon_long_rate = 13 + 10/60 + 35/(60**2) + 1/(60**3) + 170/(60**4)
+    # mean_moon_long_rate = 13 + 10/60 + 35/(60**2) + 1/(60**3) + 48/(60**4)
+    mean_moon_path_at_epoch = 84 + 28/60 + 42/3600
+    mean_moon_path_rate = 13 + 3/60 + 54/3600
+    mean_head_long_at_epoch = -(180 + 57/60 + 28/3600)
+    # mean_head_long_at_epoch = -(180 + 57/60 + 10/3600)
+    mean_head_long_rate = -((52 + 57/60 + 23/3600) / 1000)
+    e1 = 1
+    e2 = (5+14/60)/5
+
+    cur_model = Model(mean_sun_long_at_epoch, mean_sun_long_rate, aphelion_at_epoch, aphelion_rate, mean_moon_long_at_epoch, mean_moon_long_rate, mean_moon_path_at_epoch, mean_moon_path_rate, mean_head_long_at_epoch, mean_head_long_rate, e1, e2)
+    chi_squared = compare_angles(df, cur_model)     # compare current model against data
+    best_chi_squared = chi_squared
+    best_model = cur_model
+
+    accepted_list = []
+    # param_ranges = [6, 7, 5, 11, 6, 7, 5, 6, 4, 8, 7, 7]
+    # param_ranges = [6, 7, 5, 6, 4, 10, 4, 10, 4, 10, 7, 7]
+    param_ranges = [6, 6, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12]
+
+    for i in range(100):
+        print(i)
+        # add/subtract random number (normal distribution) from each parameter value
+        new_params = []
+        cur_model_param_dict = cur_model.__dict__
+        j = -1
+        for param, val in cur_model_param_dict.items():
+            j += 1
+            # # scale alpha differently for each paramater
+            scale = 10**(-param_ranges[j])
+            alpha = np.random.normal(loc=0, scale=scale)
+            new_params.append(val + alpha * val)
+
+        new_model = Model(*new_params)
+        new_chi_squared = compare_angles(df, new_model)
+
+        print(chi_squared)
+        print(new_chi_squared)
+        # print(cur_model.__dict__)
+        # print(new_model.__dict__)
+
+        # accept?
+        temp = 20
+        prob_ratio = np.exp(-(new_chi_squared-chi_squared)/(2*temp))
+        z = np.random.uniform(0, 1)
+        if prob_ratio > z:
+            print('accept')
+            cur_model = new_model
+            chi_squared = new_chi_squared
+            accepted_list.append(new_params)
+
+            # save best fit params
+            if chi_squared < best_chi_squared:
+                best_chi_squared = chi_squared
+                best_model = cur_model
+        else:
+            print('reject')
+        print()
+    # range of each param
+    # col_ranges = np.ptp(accepted_list, axis=0)
+    # est_power = [np.ceil(np.abs(np.log10(col_range))) for col_range in col_ranges]
+    # print(col_ranges)
+    # print(est_power)
 
 
 def main():
@@ -2270,7 +2477,8 @@ def main():
     # print(sunriseSunset(mjd_cur, time_zone, DST_START, DST_END, positionsArr))
 
     phi_dif, theta = phiDifAndTheta(time_zone)
-    sky_snapshots(mjd_cur, phi_dif, theta, positionsArr, 2/24, 20*24)
+    # sky_snapshots(mjd_cur, phi_dif, theta, positionsArr, 2/24, 20*24)
+    sky_snapshots2(mjd_cur, phi_dif, theta, positionsArr, 3/24, 20*24)
     # movie("SkyImages 3.10.24", "SummerSolsticeMovie")
     # movie("SkyImages 6.6.24", "SpringEquinoxMovie")
 
@@ -2297,7 +2505,13 @@ def main():
 # mjd_cur = mjd(15, 8, 2024, (0, 0))
 # compare_sun_angles(mjd_cur, 2024)
 
-mjd_cur = mjd(1, 10, 2024, (19, 0))
+# mjd_cur = mjd(1, 10, 2024, (19, 0))
 # mjd_cur = mjd(28, 4, 1178, (0, 0))
-compare_moon_angles(mjd_cur, 2024)
+# compare_moon_angles(mjd_cur, 2024)
+
+
+# # employ mcmc to fit params to Rambam's model
+out_file_path = './sun_moon_angles.txt'
+# # write_sun_moon_longitude_and_latitude(start_year=2000, end_year=2050, out_file_path=out_file_path)
+mcmc(out_file_path, n=1000)
 
