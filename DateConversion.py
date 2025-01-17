@@ -52,7 +52,7 @@ def year_of_cycle(year):
     return year % 19 if year % 19 else 19
 
 
-# Returns number of days in hebrew year given leap flag and year_type
+# Returns number of days in given hebrew year given leap flag and year_type
 def length_hebrew_yr_lookup(leap, year_type):
     if not leap:    year_type_dict = {'d': 353, 'r': 354, 'c': 355}
     else:           year_type_dict = {'d': 383, 'r': 384, 'c': 385}
@@ -60,7 +60,8 @@ def length_hebrew_yr_lookup(leap, year_type):
     return year_type_dict[year_type]
 
 
-def length_hebrew_year(year):
+# Returns number of days in given hebrew year
+def length_hebrew_yr(year):
 
     # number of complete 19-year cycles since epoch
     year_of_lunar_cycle = year_of_cycle(year)
@@ -76,7 +77,7 @@ def length_hebrew_year(year):
     year_type = hebrew_year_type(molad_tishrei, year_of_lunar_cycle, hebrew_leap)[1]
     year_len = length_hebrew_yr_lookup(hebrew_leap, year_type)
 
-    return year_len
+    return year_len, hebrew_leap
 
 
 # Multiplies time tuple of form (days, hours, chalakim) by an integer; returns new time tuple (dd always <= 6)
